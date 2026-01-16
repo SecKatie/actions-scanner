@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.envrc
+.env
+
+# Output files (CSV, TSV, logs)
+*.csv
+*.tsv
+*.log
+exploitable-confirmed.csv
+vulnerabilities*.csv
+pr-mergers.*
+repo-mergers.*
+github-ldap-matches.*
+unique_*.csv
+
+# Scanned/cloned repositories
+scan-output.txt/
+repos/
+vulnerable-workflows/
+
+# IDE and OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Node modules
+node_modules/
+
+# Worktrees
+.worktrees/
+
+# Temporary files
+i_was_here.txt
+typescript
