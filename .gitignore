@@ -1,44 +1,78 @@
-# Python-generated files
+# =============================================================================
+# Python
+# =============================================================================
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+*.egg
+.venv/
+venv/
+ENV/
 
-# Virtual environments
-.venv
-
-.envrc
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
 .env
+.envrc
+*.pem
+*.key
 
-# Output files (CSV, TSV, logs)
-*.csv
-*.tsv
-*.log
-exploitable-confirmed.csv
-vulnerabilities*.csv
-pr-mergers.*
-repo-mergers.*
-github-ldap-matches.*
-unique_*.csv
+# =============================================================================
+# Generated Data Files
+# =============================================================================
+# Main outputs (keep in root for easy access)
+vulnerabilities.csv
+vulnerabilities-with-mergers.csv
+vulnerabilities-with-mergers.tsv
+pr-mergers.csv
+pr-mergers.log
+repo-mergers.csv
+repo-mergers.tsv
 
-# Scanned/cloned repositories
+# Contact/LDAP data
+contacts.tsv
+contacts-with-titles.tsv
+lookup_ldap.sh
+
+# Intermediate data (in data/ directory)
+data/
+
+# Input files
+repos.txt
+
+# =============================================================================
+# Scanned/Cloned Repositories
+# =============================================================================
 scan-output.txt/
 repos/
 vulnerable-workflows/
+.worktrees/
 
-# IDE and OS files
+# =============================================================================
+# IDE & OS
+# =============================================================================
 .DS_Store
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Node modules
+# =============================================================================
+# Node.js
+# =============================================================================
 node_modules/
+package-lock.json
 
-# Worktrees
-.worktrees/
-
-# Temporary files
+# =============================================================================
+# Temporary & Misc
+# =============================================================================
 i_was_here.txt
 typescript
+*.log

