@@ -28,8 +28,11 @@ ENV/
 # =============================================================================
 # Main outputs (keep in root for easy access)
 vulnerabilities.csv
+vulnerabilities-clean.csv
+vulnerabilities-new.csv
 vulnerabilities-with-mergers.csv
 vulnerabilities-with-mergers.tsv
+vulnerabilities.json
 pr-mergers.csv
 pr-mergers.log
 repo-mergers.csv
@@ -45,6 +48,11 @@ data/
 
 # Input files
 repos.txt
+repos-test.txt
+repos-vulnerable.txt
+
+# Scan artifacts
+results.json
 
 # =============================================================================
 # Scanned/Cloned Repositories
@@ -76,3 +84,6 @@ package-lock.json
 i_was_here.txt
 typescript
 *.log
+.actions-scanner.yaml
+vulnerablities*.json
+repos*/
