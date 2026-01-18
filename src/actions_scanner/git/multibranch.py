@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from actions_scanner.utils.path import encode_branch, extract_org_repo_branch_from_path
+
 from .branch import BranchSelector
 from .worktree import WorktreeManager, WorktreeTask
 
@@ -17,6 +19,16 @@ class MultiBranchScanSetup:
     worktrees_failed: int
     branches_by_repo: dict[str, list[str]]
     scan_paths: list[Path]
+
+
+@dataclass
+class RepoTarget:
+    """Repo metadata for worktree creation."""
+
+    path: Path
+    org: str
+    repo: str
+    branch: str
 
 
 class MultiBranchScanner:
@@ -58,16 +70,33 @@ class MultiBranchScanner:
         Returns:
             List of paths to git repositories
         """
-        repos = []
-        for item in base_dir.iterdir():
-            if item.is_dir():
-                # Check if it's a git repo
-                if (item / ".git").exists():
-                    repos.append(item)
-                elif (item / ".git").is_file():
-                    # Worktree - .git is a file pointing to main repo
-                    repos.append(item)
+        repos: list[Path] = []
+        if (base_dir / ".git").exists():
+            repos.append(base_dir)
+
+        for git_dir in base_dir.rglob(".git"):
+            repo_path = git_dir.parent
+            if repo_path == base_dir:
+                continue
+            if ".worktrees" in repo_path.parts:
+                continue
+            repos.append(repo_path)
         return repos
+
+    def _build_repo_targets(self, base_dir: Path) -> list[RepoTarget]:
+        """Build repo targets from discovered git dirs."""
+        targets: list[RepoTarget] = []
+        for repo_path in self._find_repos(base_dir):
+            org, repo, branch = extract_org_repo_branch_from_path(str(repo_path))
+            targets.append(
+                RepoTarget(
+                    path=repo_path,
+                    org=org,
+                    repo=repo,
+                    branch=branch,
+                )
+            )
+        return targets
 
     async def setup_worktrees(
         self,
@@ -92,42 +121,49 @@ class MultiBranchScanner:
         worktrees_dir.mkdir(parents=True, exist_ok=True)
 
         # Find all repos
-        repos = self._find_repos(repos_dir)
+        repo_targets = self._build_repo_targets(repos_dir)
 
         if on_progress:
-            on_progress("discover", 0, len(repos), "Finding repositories")
+            on_progress("discover", 0, len(repo_targets), "Finding repositories")
 
         # Select branches for each repo
         branches_by_repo: dict[str, list[str]] = {}
         tasks: list[WorktreeTask] = []
 
-        for i, repo_path in enumerate(repos):
-            repo_name = repo_path.name
+        for i, target in enumerate(repo_targets):
+            repo_label = f"{target.org}/{target.repo}".strip("/")
+            if not repo_label:
+                repo_label = target.path.name
 
             if on_progress:
-                on_progress("branches", i + 1, len(repos), repo_name)
+                on_progress("branches", i + 1, len(repo_targets), repo_label)
 
             try:
                 branches = await self.branch_selector.select_branches(
-                    repo_path, self.max_branches
+                    target.path, self.max_branches
                 )
-                branches_by_repo[repo_name] = branches
+                branches_by_repo[repo_label] = branches
 
                 # Create worktree tasks for non-default branches
                 # (default branch is already checked out in the main repo)
-                default_branch = await self.branch_selector.get_default_branch(repo_path)
+                default_branch = await self.branch_selector.get_default_branch(target.path)
 
                 for branch in branches:
                     if branch == default_branch:
                         continue  # Skip default, it's in main repo
 
                     # Sanitize branch name for directory
-                    safe_branch = branch.replace("/", "-")
-                    worktree_path = worktrees_dir / repo_name / safe_branch
+                    safe_branch = encode_branch(branch)
+                    if target.org and target.repo:
+                        worktree_path = worktrees_dir / target.org / target.repo / safe_branch
+                        repo_name = f"{target.org}/{target.repo}"
+                    else:
+                        worktree_path = worktrees_dir / target.path.name / safe_branch
+                        repo_name = target.path.name
 
                     tasks.append(
                         WorktreeTask(
-                            repo_path=repo_path,
+                            repo_path=target.path,
                             repo_name=repo_name,
                             branch=branch,
                             worktree_path=worktree_path,
@@ -135,7 +171,7 @@ class MultiBranchScanner:
                     )
             except Exception:
                 # Skip repos that fail branch discovery
-                branches_by_repo[repo_name] = []
+                branches_by_repo[repo_label] = []
 
         if on_progress:
             on_progress("worktrees", 0, len(tasks), "Creating worktrees")
@@ -158,8 +194,8 @@ class MultiBranchScanner:
         scan_paths: list[Path] = []
 
         # Add main repo paths (default branches)
-        for repo_path in repos:
-            scan_paths.append(repo_path)
+        for target in repo_targets:
+            scan_paths.append(target.path)
 
         # Add worktree paths
         for wt in worktrees:

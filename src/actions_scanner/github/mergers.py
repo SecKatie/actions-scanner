@@ -1,4 +1,5 @@
 """Find PR mergers for vulnerable repositories using GitHub GraphQL API."""
+
 import asyncio
 import subprocess
 from collections import defaultdict
@@ -7,21 +8,23 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Known bot accounts to exclude from merger lists
-BOT_ACCOUNTS = frozenset({
-    "openshift-merge-bot",
-    "openshift-merge-robot",
-    "renovate",
-    "openshift-ci",
-    "github-actions",
-    "dependabot",
-    "red-hat-konflux",
-    "renovate-bot",
-    "mergify",
-    "dependabot[bot]",
-    "github-actions[bot]",
-    "renovate[bot]",
-    "mergify[bot]",
-})
+BOT_ACCOUNTS = frozenset(
+    {
+        "openshift-merge-bot",
+        "openshift-merge-robot",
+        "renovate",
+        "openshift-ci",
+        "github-actions",
+        "dependabot",
+        "red-hat-konflux",
+        "renovate-bot",
+        "mergify",
+        "dependabot[bot]",
+        "github-actions[bot]",
+        "renovate[bot]",
+        "mergify[bot]",
+    }
+)
 
 
 @dataclass
@@ -116,9 +119,7 @@ class MergerFinder:
             )
 
             try:
-                stdout, _stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=self.timeout
-                )
+                stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
             except TimeoutError:
                 proc.kill()
                 await proc.wait()
@@ -127,11 +128,7 @@ class MergerFinder:
             if proc.returncode != 0:
                 return []
 
-            mergers = [
-                m.strip()
-                for m in stdout.decode().strip().split("\n")
-                if m.strip()
-            ]
+            mergers = [m.strip() for m in stdout.decode().strip().split("\n") if m.strip()]
             return mergers
 
         except (subprocess.SubprocessError, OSError):
@@ -153,6 +150,7 @@ class MergerFinder:
         Returns:
             RepoMergers with merger information
         """
+
         async def _find():
             try:
                 mergers = await self.get_mergers(org, repo)
@@ -169,9 +167,7 @@ class MergerFinder:
                 # Convert to MergerInfo list, sorted by count
                 merger_list = [
                     MergerInfo(login=login, merge_count=count)
-                    for login, count in sorted(
-                        merger_counts.items(), key=lambda x: -x[1]
-                    )
+                    for login, count in sorted(merger_counts.items(), key=lambda x: -x[1])
                 ]
 
                 return RepoMergers(

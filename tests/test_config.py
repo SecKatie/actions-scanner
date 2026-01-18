@@ -1,7 +1,5 @@
 """Tests for configuration management."""
 
-
-
 from actions_scanner.config import Settings, get_settings
 
 

@@ -51,9 +51,7 @@ class TestPwnRequestDetector:
         # No dangerous checkout + execution pattern
         assert len(vulns) == 0
 
-    def test_scan_directory(
-        self, detector: PwnRequestDetector, workflows_dir: Path
-    ) -> None:
+    def test_scan_directory(self, detector: PwnRequestDetector, workflows_dir: Path) -> None:
         """Test scanning a directory of workflows."""
         result = detector.scan_directory(workflows_dir)
 

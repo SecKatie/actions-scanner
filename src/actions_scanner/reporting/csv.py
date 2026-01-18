@@ -62,20 +62,22 @@ def generate_csv_report(
 
     with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "org",
-            "repo",
-            "branch",
-            "workflow_path",
-            "job_name",
-            "checkout_line",
-            "checkout_ref",
-            "exec_line",
-            "exec_type",
-            "exec_value",
-            "protection",
-            "protection_detail",
-        ])
+        writer.writerow(
+            [
+                "org",
+                "repo",
+                "branch",
+                "workflow_path",
+                "job_name",
+                "checkout_line",
+                "checkout_ref",
+                "exec_line",
+                "exec_type",
+                "exec_value",
+                "protection",
+                "protection_detail",
+            ]
+        )
 
         for v in sorted(vulnerabilities, key=lambda x: (str(x.workflow_path), x.job_name)):
             org, repo = extract_org_repo_from_path(str(v.workflow_path))

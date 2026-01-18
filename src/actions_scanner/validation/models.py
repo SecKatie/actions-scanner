@@ -21,9 +21,15 @@ class ValidationOutput:
     org: str
     repo: str
     result: ValidationResult
+    branch: str = ""
     workflow_paths: list[str] = field(default_factory=list)
     output_file: Path | None = None
     error: str | None = None
+    issue_type: str = ""
+    cvss: float | None = None
+    cwe: str = ""
+    summary: str = ""
+    confidence: str = ""
     duration_seconds: float = 0.0
 
     def to_dict(self) -> dict:
@@ -31,10 +37,16 @@ class ValidationOutput:
         return {
             "org": self.org,
             "repo": self.repo,
+            "branch": self.branch,
             "result": self.result.value,
             "workflow_paths": self.workflow_paths,
-            "output_file": str(self.output_file) if self.output_file else None,
+            "confirmation_file": str(self.output_file) if self.output_file else None,
             "error": self.error,
+            "issue_type": self.issue_type,
+            "cvss": self.cvss,
+            "cwe": self.cwe,
+            "summary": self.summary,
+            "confidence": self.confidence,
             "duration_seconds": self.duration_seconds,
         }
 

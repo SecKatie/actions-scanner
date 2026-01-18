@@ -163,10 +163,7 @@ class GitHubClient:
                 ) as response:
                     self._update_rate_limit(response.headers)
 
-                    if (
-                        response.status in (429, 403)
-                        and self._rate_limit.remaining == 0
-                    ):
+                    if response.status in (429, 403) and self._rate_limit.remaining == 0:
                         self._stats.rate_limit_hits += 1
                         retry_after = response.headers.get("Retry-After", "60")
                         raise RuntimeError(f"Rate limited. Retry after {retry_after}s")

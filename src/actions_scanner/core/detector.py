@@ -5,12 +5,14 @@ from pathlib import Path
 
 import yaml
 
+from actions_scanner.utils.path import extract_org_repo_branch_from_path
+
 from .models import ScanResult, VulnerableJob
 from .patterns import (
     AUTHORIZATION_JOB_PATTERNS,
     DANGEROUS_COMMANDS,
-    DANGEROUS_REPO_PATTERNS,
     DANGEROUS_REF_PATTERNS,
+    DANGEROUS_REPO_PATTERNS,
     PERMISSION_CHECK_PATTERNS,
     PERMISSION_OUTPUT_PATTERNS,
     SAME_REPO_PATTERNS,
@@ -76,6 +78,7 @@ class PwnRequestDetector:
             exec_line = self._get_line_number(content, job_name, exec_index)
             has_auth = self._has_authorization_job(workflow, job_name)
             protection, protection_detail = self._analyze_protection(workflow, job_name)
+            _org, _repo, branch = extract_org_repo_branch_from_path(str(workflow_path))
 
             vulnerabilities.append(
                 VulnerableJob(
@@ -87,6 +90,7 @@ class PwnRequestDetector:
                     exec_type=exec_type,
                     exec_value=exec_value,
                     has_authorization=has_auth,
+                    branch=branch,
                     protection=protection,
                     protection_detail=protection_detail,
                 )
@@ -183,9 +187,7 @@ class PwnRequestDetector:
 
         return None
 
-    def _find_dangerous_exec(
-        self, steps: list, checkout_index: int
-    ) -> tuple[int, str, str] | None:
+    def _find_dangerous_exec(self, steps: list, checkout_index: int) -> tuple[int, str, str] | None:
         """Find a dangerous exec step after the checkout.
 
         Returns (step_index, exec_type, exec_value) or None.

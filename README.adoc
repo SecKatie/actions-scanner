@@ -50,27 +50,68 @@ Execute: npm install / make build (runs attacker code)
 Exfiltrate secrets to attacker server
 ----
 
-[[quick-start]]
-== Quick Start
+[[installation]]
+== Installation
 
-Get started in 4 commands:
+Install with uv (recommended):
 
 [source,bash]
 ----
-# 1. Create input file with GitHub repo URLs (one per line)
-echo "https://github.com/your-org/your-repo" > repos.txt
+uv tool install actions-scanner
+actions-scanner --help
+----
 
-# 2. Clone .github folders from all repos
-uv run scripts/clone_repos.py repos.txt
+Install with pipx:
 
-# 3. Scan for vulnerabilities
-uv run scripts/scan_repos_async.py
+[source,bash]
+----
+pipx install actions-scanner
+actions-scanner --help
+----
 
-# 4. Review results
-cat vulnerabilities.csv
+Install with pip:
+
+[source,bash]
+----
+pip install actions-scanner
+actions-scanner --help
+----
+
+[[quick-start]]
+== Quick Start
+
+Get started in 3 commands:
+
+[source,bash]
+----
+# 1. Scan a target (org name, repo URL, directory, or list file)
+actions-scanner scan your-org --format json -o outputs/vulnerabilities.json --validate
+
+# 2. Review results
+cat outputs/vulnerabilities.json
 ----
 
 TIP: Use `just scan` for the complete scanning workflow.
+
+[[full-workflow]]
+== Full Workflow (CLI)
+
+End-to-end workflow using the CLI:
+
+[source,bash]
+----
+# 1. Scan a target (org name, repo URL, directory, or list file)
+actions-scanner scan org1 --format csv -o outputs/vulnerabilities.csv
+
+# 2. Validate findings (JSON or CSV)
+actions-scanner validate outputs/vulnerabilities.csv
+
+# 3. Export to other formats
+actions-scanner report outputs/vulnerabilities.csv -o outputs/vulnerabilities.md --format markdown
+
+# 4. Enrich CSV with maintainer data (optional)
+actions-scanner enrich outputs/vulnerabilities.csv -o outputs/vulnerabilities-with-mergers.csv --with-mergers
+----
 
 // Interactive collapsible for prerequisites
 [details="Need help getting started?"]
@@ -82,122 +123,82 @@ See <<development,Development>> for prerequisites and setup instructions.
 [[workflow-pipeline]]
 == Workflow Pipeline
 
-image::https://img.shields.io/badge/Phase-Discovery-blue["Phase 1"] →
-image::https://img.shields.io/badge/Phase-Clone-green["Phase 2"] →
-image::https://img.shields.io/badge/Phase-Scan-orange["Phase 3"] →
-image::https://img.shields.io/badge/Phase-Maintainers-red["Phase 4"] →
-image::https://img.shields.io/badge/Phase-AI-purple["Phase 5"] →
-image::https://img.shields.io/badge/Phase-Outreach-yellow["Phase 6"]
+image:https://img.shields.io/badge/Phase-Scan-orange["Phase 1"] →
+image:https://img.shields.io/badge/Phase-Validate-blue["Phase 2"] →
+image:https://img.shields.io/badge/Phase-Enrich-green["Phase 3"]
 
-The full analysis pipeline consists of six phases:
+The full analysis pipeline consists of three phases:
 
 [cols="1,1,1"]
 |===
 |Phase |Output |Command
 
 |Phase 1
-|`repos.txt`
-|`uv run scripts/scraper.py --orgs org1 org2`
+|`outputs/vulnerabilities.csv`
+|`actions-scanner scan org1 -o outputs/vulnerabilities.csv`
 
 |Phase 2
-|`scan-output.txt/`
-|`uv run scripts/clone_repos.py repos.txt`
+|`outputs/vulnerabilities-validated.json`
+|`actions-scanner validate outputs/vulnerabilities.csv`
 
 |Phase 3
-|`vulnerabilities.csv`
-|`uv run scripts/scan_repos_async.py`
-
-|Phase 4
-|`pr-mergers.csv`
-|`uv run scripts/find-pr-mergers.py`
-
-|Phase 5
-|`confirmed_vulnerable.txt`
-|`./analyze_repos.sh`
-
-|Phase 6
-|`repo-contributors-active.tsv`
-|`./lookup_ldap.sh`
+|`outputs/vulnerabilities-with-mergers.csv`
+|`actions-scanner enrich outputs/vulnerabilities.csv --with-mergers`
 |===
 
 [[phase1]]
-=== Phase 1: Repository Discovery
+=== Phase 1: Scan Targets
 
-Find repositories in GitHub organizations that use `pull_request_target`:
-
-[source,bash]
-----
-# Scan GitHub organizations for repos with pull_request_target workflows
-uv run scripts/scraper.py --orgs org1 org2 org3 > repos.txt
-
-# Or scan from a file of organization names
-uv run scripts/scraper.py --orgs-file orgs.txt > repos.txt
-
-# Filter for specific repositories (e.g., only production)
-uv run scripts/scraper.py --orgs org1 --archived false --fork false > repos.txt
-----
-
-**Output:** `repos.txt` - List of GitHub repository URLs (one per line)
+Scan any combination of orgs, repo URLs, local directories, or list files:
 
 [source,bash]
 ----
-https://github.com/redhat-developer/rhdh
-https://github.com/openshift/kubernetes
-https://github.com/konflux-ci/konflux-ui
+# Scan all repos in an org (requires GITHUB_TOKEN)
+actions-scanner scan org1 -o outputs/vulnerabilities.csv
+
+# Scan a single repo URL
+actions-scanner scan https://github.com/org/repo -o outputs/vulnerabilities.csv
+
+# Scan a local directory
+actions-scanner scan /path/to/repos -o outputs/vulnerabilities.csv
+
+# Scan a newline-separated list of repo URLs and/or directories
+actions-scanner scan ./targets.txt -o outputs/vulnerabilities.csv
 ----
 
-NOTE: The scraper uses GitHub GraphQL API and requires `gh` CLI authentication.
+**Output:** `outputs/vulnerabilities.csv` or `outputs/vulnerabilities.json`
+
+Repositories are cloned to a secure temporary directory with this layout:
+`<tmp>/org/repo/branch/code/.github/workflows/*.yml`
 
 [[phase2]]
-=== Phase 2: Clone Workflow Files
+=== Phase 2: Validate Findings
 
-Sparse-clone only the `.github/` folder from each repository for efficiency:
+Confirm findings with an AI agent and attach CVSS/CWE metadata:
 
 [source,bash]
 ----
-# Clone all repos (uses sparse-checkout for efficiency)
-uv run scripts/clone_repos.py repos.txt
-
-# Limit to first N repos for testing
-uv run scripts/clone_repos.py repos.txt --limit 50
-
-# Specify output directory
-uv run scripts/clone_repos.py repos.txt --output-dir scan-output.txt
-
-# Control parallelism (default: 16 workers)
-uv run scripts/clone_repos.py repos.txt --workers 32
+# Validate findings (works with CSV or JSON from scan)
+actions-scanner validate outputs/vulnerabilities.csv
 ----
 
-**Output:** `scan-output.txt/{org}/{repo}/{branch}/.github/workflows/*.yml`
-
-The scanner clones each branch as a separate directory to analyze all workflow versions.
-
-WARNING: Cloning large numbers of repositories can consume significant disk space and network bandwidth.
+**Output:** `outputs/vulnerabilities-validated.json`
 
 [[phase3]]
 === Phase 3: Vulnerability Scanning
 
-Scan cloned workflows for PwnRequest vulnerabilities:
+Scan workflows for PwnRequest vulnerabilities:
 
 [source,bash]
 ----
-# Full scan (recommended - async for performance)
-uv run scripts/scan_repos_async.py
+# Scan a directory of repos
+actions-scanner scan /path/to/repos -o outputs/vulnerabilities.csv
 
-# Refresh git worktrees before scanning
-uv run scripts/scan_repos_async.py --refresh-worktrees
-
-# Limit scan for testing
-uv run scripts/scan_repos_async.py --limit 100
-
-# Using justfile
-just scan
-
-# Scan specific repo only
-uv run scripts/scan_repos_async.py --repo redhat-developer/rhdh
+# Scan multiple branches per repo (default + oldest + newest + random)
+actions-scanner scan /path/to/repos --all-branches --max-branches 10 -o outputs/vulnerabilities.csv
 ----
 
-**Output:** `vulnerabilities.csv`
+**Output:** `outputs/vulnerabilities.csv`
 
 // Better formatted table with alignment and descriptions
 [cols="1,3,1"]
@@ -258,7 +259,7 @@ uv run scripts/scan_repos_async.py --repo redhat-developer/rhdh
 
 |`workflow_path`
 |Local path to workflow file
-|`scan-output.txt/redhat-developer/rhdh/main/.github/workflows/ci.yml`
+|`/tmp/actions-scanner-*/redhat-developer/rhdh/main/code/.github/workflows/ci.yml`
 |===
 
 **Protection Levels:**
@@ -296,20 +297,16 @@ Identify who merges PRs in vulnerable repositories (for outreach):
 
 [source,bash]
 ----
-# Get PR merger information
-uv run scripts/find-pr-mergers.py vulnerabilities.csv pr-mergers.csv
-
-# Add merger info to vulnerability data
-uv run scripts/add-mergers-to-vulnerabilities.py
+# Get PR merger information and merge into CSV
+actions-scanner enrich outputs/vulnerabilities.csv -o outputs/vulnerabilities-with-mergers.csv --with-mergers
 
 # View top maintainers
-head -20 pr-mergers.csv
+head -20 outputs/vulnerabilities-with-mergers.csv
 ----
 
 **Output:**
 
-* `pr-mergers.csv` - GitHub users who merge PRs per repo
-* `vulnerabilities-with-mergers.csv` - Vulnerabilities with maintainer info
+* `outputs/vulnerabilities-with-mergers.csv` - Vulnerabilities with maintainer info
 
 [details="View sample PR merger output"]
 --
@@ -324,23 +321,20 @@ redhat-developer,rhdh,bobsmith,Bob Smith,28
 [[phase5]]
 === Phase 5: AI-Assisted Confirmation
 
-Use Claude to manually confirm vulnerabilities and document exploitation:
+Use an AI agent to confirm vulnerabilities and document exploitation:
 
 [source,bash]
 ----
-# Analyze all repositories with vulnerable workflows
-./analyze_repos.sh
+# Validate findings (uses your configured agent)
+actions-scanner validate outputs/vulnerabilities.csv
 
-# The script runs Claude on each repo to:
+# The command will:
 # - Confirm the vulnerability is real (not false positive)
 # - Document specific exploitation steps
 # - Identify secrets at risk
-
-# Analyze specific repo only
-./analyze_repos.sh redhat-developer/rhdh
 ----
 
-**Output:** Per-repo analysis files in `scan-output.txt/{org}/{repo}/`:
+**Output:** Per-repo analysis files in the cloned repo directory:
 
 * `confirmed_vulnerable.txt` - Exploitable without approval gates
 * `confirmed_weakness.txt` - Exploitable but requires label/approval
@@ -349,6 +343,13 @@ Use Claude to manually confirm vulnerabilities and document exploitation:
 [details="View sample confirmed vulnerability"]
 --
 ----
+---
+issue_type: vulnerability
+cvss: 9.1
+cwe: CWE-829
+summary: "Untrusted checkout executed with secrets"
+confidence: high
+---
 ## Vulnerability Confirmed
 
 **Workflow:** .github/workflows/ci.yml
@@ -385,17 +386,15 @@ Use workflow_run trigger instead of pull_request_target.
 
 [source,bash]
 ----
-# Find all confirmed vulnerabilities
-find scan-output.txt -name 'confirmed_vulnerable.txt'
+# List validation artifacts
+jq -r '.validations[].confirmation_file' outputs/vulnerabilities-validated.json
 
 # Count confirmed vulnerabilities
-find scan-output.txt -name 'confirmed_vulnerable.txt' | wc -l
+jq '[.vulnerabilities[] | select(.issue_type=="vulnerability")] | length' \
+  outputs/vulnerabilities-validated.json
 
-# View a specific analysis
-cat scan-output.txt/redhat-developer/rhdh/confirmed_vulnerable.txt
-
-# Get summary across all repos
-./analyze_repos.sh --summary
+# View a specific analysis file
+cat /tmp/actions-scanner-*/org/repo/branch/code/confirmed_vulnerable.txt
 ----
 
 [[phase6]]
@@ -405,30 +404,17 @@ For Red Hat repositories, identify active employees to contact:
 
 [source,bash]
 ----
-# Step 1: Get contributors for specific repos
-gh api repos/redhat-developer/rhdh/contributors > repo-contributors.json
-
-# Step 2: Filter for Red Hat emails
-gh api repos/redhat-developer/rhdh/contributors | jq -r '.[].login' | while read user; do
-  gh api users/$user | jq -r 'select(.email | contains("redhat.com"))'
-done > repo-contributors-redhat.tsv
-
-# Step 3: Verify active employees via LDAP
-./lookup_ldap.sh
-
-# Output: repo-contributors-redhat-ldap.tsv with LDAP status
+# Enrich with LDAP identity data (requires LDAP config)
+actions-scanner enrich outputs/vulnerabilities.csv -o outputs/vulnerabilities-with-ldap.csv --with-ldap
 ----
 
 **Output Files:**
 
-* `repo-contributors.tsv` - All contributors
-* `repo-contributors-redhat.tsv` - Red Hat email addresses only
-* `repo-contributors-redhat-ldap.tsv` - With LDAP verification
-* `repo-contributors-active.tsv` - Verified active employees only
+* `outputs/vulnerabilities-with-ldap.csv` - Vulnerabilities with LDAP identity data
 
 [details="LDAP lookup configuration"]
 --
-Edit `lookup_ldap.sh` to configure your LDAP server:
+Configure LDAP via environment variables:
 
 [source,bash]
 ----
@@ -442,47 +428,27 @@ LDAP_FILTER="(mail=*)"
 [[file-reference]]
 == File Reference
 
-=== Scripts
+=== CLI Commands
 
 [cols="1,3,1"]
 |===
-|Script |Purpose |Runtime
+|Command |Purpose |Runtime
 
-|`scripts/scraper.py`
-|Scan GitHub orgs for repos using pull_request_target
-|~2 min/100 repos
-
-|`scripts/clone_repos.py`
-|Sparse-clone .github folders from repos
-|~10 min/100 repos
-
-|`scripts/scan_repos_async.py`
-|Main vulnerability scanner (async)
+|`actions-scanner scan`
+|Scan orgs, repo URLs, directories, or list files
 |~1 min/100 repos
 
-|`scripts/pwn_request_detector.py`
-|Core detection logic for PwnRequest pattern
-|N/A (library)
-
-|`scripts/find-pr-mergers.py`
-|Get PR merger information via GitHub GraphQL
-|~5 min/100 repos
-
-|`scripts/add-mergers-to-vulnerabilities.py`
-|Merge vulnerability and maintainer data
-|~30 sec
-
-|`scripts/parse_vulnerabilities_csv.py`
-|Helper to parse CSV for shell scripts
-|N/A (library)
-
-|`analyze_repos.sh`
+|`actions-scanner validate`
 |AI-assisted vulnerability confirmation
 |~2 min/repo
 
-|`lookup_ldap.sh`
-|LDAP lookup for Red Hat employees
-|~1 sec/user
+|`actions-scanner enrich`
+|Add PR merger or LDAP identity data
+|~5 min/100 repos
+
+|`actions-scanner report`
+|Generate markdown or JSON reports from CSV
+|~30 sec
 |===
 
 === Data Files (gitignored - generated)
@@ -491,28 +457,24 @@ LDAP_FILTER="(mail=*)"
 |===
 |File |Contents |Size (typical)
 
-|`repos.txt`
-|Input: GitHub repo URLs to scan
+|`targets.txt`
+|Input: repo URLs and/or directories (one per line)
 |1 KB - 10 MB
 
-|`vulnerabilities.csv`
+|`outputs/vulnerabilities.csv`
 |Raw scanner output
 |10 KB - 5 MB
 
-|`pr-mergers.csv`
-|PR merger info per repo
-|5 KB - 2 MB
+|`outputs/vulnerabilities-validated.json`
+|Validated scanner output with AI confirmations
+|10 KB - 5 MB
 
-|`vulnerabilities-with-mergers.csv`
+|`outputs/vulnerabilities-with-mergers.csv`
 |Combined vulnerability + maintainer data
 |15 KB - 7 MB
 
-|`repo-mergers.tsv`
-|Unique maintainers per repo (TSV format)
-|5 KB - 1 MB
-
-|`repo-contributors-*.tsv`
-|Contributor tracking for outreach
+|`outputs/vulnerabilities-with-ldap.csv`
+|Vulnerabilities with LDAP identity data
 |10 KB - 3 MB
 |===
 
@@ -522,28 +484,21 @@ LDAP_FILTER="(mail=*)"
 |===
 |Directory |Contents |Size (typical)
 
-|`scan-output.txt/`
-|Cloned workflow files: `{org}/{repo}/{branch}/.github/`
+|`/tmp/actions-scanner-*`
+|Temporary clones: `{org}/{repo}/{branch}/code/.github/`
 |100 MB - 10 GB
 
 |`vulnerable-workflows/`
 |Example vulnerable workflows for reference
 |1 MB
 
-|`.worktrees/`
-|Git worktrees for branch scanning
-|500 MB - 5 GB
-
-|`scripts/`
-|All Python and shell scripts
-|100 KB
 |===
 
 // More detailed detection logic with examples
 [[detection-logic]]
 == Detection Logic
 
-The scanner (`pwn_request_detector.py`) looks for three conditions in the same job:
+The scanner (`src/actions_scanner/core/detector.py`) looks for three conditions in the same job:
 
 === 1. Trigger: pull_request_target
 
@@ -779,14 +734,6 @@ gh auth login
 # Follow prompts to authenticate
 ----
 
-**Issue:** `Permission denied: './analyze_repos.sh'`
-
-Solution:
-[source,bash]
-----
-chmod +x analyze_repos.sh
-----
-
 **Issue:** `uv: command not found`
 
 Solution:
@@ -801,14 +748,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Solution:
 [source,bash]
 ----
-# Check if workflows were cloned
-ls scan-output.txt/
+# Check the scan target and output
+ls outputs/
+jq '.metadata.scan_base_dir' outputs/vulnerabilities.json
 
-# Refresh git worktrees
-uv run scripts/scan_repos_async.py --refresh-worktrees
-
-# Check scanner logs
-uv run scripts/scan_repos_async.py --verbose
+# Try scanning additional branches
+actions-scanner scan /path/to/repos --all-branches --max-branches 10 -o outputs/vulnerabilities.csv
 ----
 
 **Issue:** Memory error when scanning many repos
@@ -817,11 +762,11 @@ Solution:
 [source,bash]
 ----
 # Reduce worker count
-uv run scripts/scan_repos_async.py --workers 4
+actions-scanner scan org1 --clone-workers 2 -o outputs/vulnerabilities.csv
 
 # Scan in batches
-head -100 repos.txt > repos-batch1.txt
-uv run scripts/scan_repos_async.py --input repos-batch1.txt
+head -100 targets.txt > targets-batch1.txt
+actions-scanner scan targets-batch1.txt -o outputs/vulnerabilities.csv
 ----
 --
 

@@ -1,4 +1,5 @@
 """Branch selection with smart sampling for multi-branch scanning."""
+
 import asyncio
 import random
 from collections.abc import Callable
@@ -126,9 +127,7 @@ class BranchSelector:
         except RuntimeError:
             return []
 
-    async def select_branches(
-        self, repo_path: Path, max_branches: int | None = None
-    ) -> list[str]:
+    async def select_branches(self, repo_path: Path, max_branches: int | None = None) -> list[str]:
         """Select branches to scan using smart sampling.
 
         Selection strategy:

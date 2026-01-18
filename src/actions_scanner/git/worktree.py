@@ -1,4 +1,5 @@
 """Git worktree management for multi-branch scanning."""
+
 import asyncio
 import contextlib
 from collections.abc import Callable
@@ -60,6 +61,16 @@ class WorktreeManager:
             raise RuntimeError(f"Git command failed: {stderr.decode()}")
         return proc.returncode, stdout.decode(), stderr.decode()
 
+    def _resolve_worktree_git_dir(self, worktree_path: Path) -> Path:
+        """Resolve the actual git dir for a worktree."""
+        git_path = worktree_path / ".git"
+        if git_path.is_file():
+            content = git_path.read_text().strip()
+            if content.startswith("gitdir:"):
+                git_dir = content.split(":", 1)[1].strip()
+                return Path(git_dir)
+        return git_path
+
     async def prune_worktrees(self, repo_path: Path) -> None:
         """Prune stale worktree registrations."""
         with contextlib.suppress(RuntimeError):
@@ -82,8 +93,10 @@ class WorktreeManager:
         Returns:
             WorktreeInfo if successful, None otherwise
         """
+
         async def _create():
             try:
+                task.worktree_path.parent.mkdir(parents=True, exist_ok=True)
                 # Create worktree without checking out files
                 await self._run_git_command(
                     [
@@ -99,8 +112,8 @@ class WorktreeManager:
                     cwd=task.repo_path,
                 )
 
-                # Worktree git dir is at <repo>/.git/worktrees/<worktree-name>/
-                git_dir = task.repo_path / ".git" / "worktrees" / task.worktree_path.name
+                # Resolve worktree git dir (handles nested paths)
+                git_dir = self._resolve_worktree_git_dir(task.worktree_path)
 
                 # Write sparse-checkout config directly (faster than git commands)
                 config_file = git_dir / "config"
@@ -204,26 +217,15 @@ class WorktreeManager:
         if not worktrees_base.exists():
             return worktrees
 
-        for repo_dir in worktrees_base.iterdir():
-            if not repo_dir.is_dir():
-                continue
-
-            repo_name = repo_dir.name
-
-            for branch_dir in repo_dir.iterdir():
-                if not branch_dir.is_dir():
-                    continue
-
-                if (branch_dir / ".git").exists():
-                    # Extract branch name from directory name
-                    # (slashes are replaced with dashes)
-                    branch_name = branch_dir.name
-                    worktrees.append(
-                        WorktreeInfo(
-                            repo_name=repo_name,
-                            branch=branch_name,
-                            path=branch_dir,
-                        )
-                    )
+        for git_dir in worktrees_base.rglob(".git"):
+            branch_dir = git_dir.parent
+            repo_name = branch_dir.parent.name
+            worktrees.append(
+                WorktreeInfo(
+                    repo_name=repo_name,
+                    branch=branch_dir.name,
+                    path=branch_dir,
+                )
+            )
 
         return worktrees

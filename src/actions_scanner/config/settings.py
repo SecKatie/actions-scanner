@@ -173,6 +173,13 @@ class Settings(BaseSettings):
 
         return cls(**settings_dict)
 
+    def get_validation_command(self, prompt: str) -> str:
+        """Build a validation command with a safely quoted prompt."""
+        import shlex
+
+        quoted_prompt = shlex.quote(prompt)
+        return self.validation.command_template.format(quoted_prompt)
+
 
 # Default config file paths to check
 DEFAULT_CONFIG_PATHS = [

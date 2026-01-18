@@ -86,9 +86,7 @@ class AsyncProgressTracker:
             time_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
 
             line = (
-                f"\r  [{bar}] {pct:5.1f}% │ "
-                f"{self.completed}/{self.total} │ "
-                f"{time_str} {extra_info}"
+                f"\r  [{bar}] {pct:5.1f}% │ {self.completed}/{self.total} │ {time_str} {extra_info}"
             )
             print(line, end="", flush=True)
 

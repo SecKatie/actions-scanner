@@ -56,9 +56,7 @@ def generate_markdown_report(
         if exploitable:
             f.write("---\n\n")
             f.write("## EXPLOITABLE VULNERABILITIES\n\n")
-            f.write(
-                "These workflows can be exploited by submitting a malicious pull request.\n\n"
-            )
+            f.write("These workflows can be exploited by submitting a malicious pull request.\n\n")
 
             # Group by repo
             by_repo: dict[str, list[VulnerableJob]] = defaultdict(list)
@@ -90,7 +88,9 @@ def generate_markdown_report(
                         if v.branch:
                             f.write(f"  - Branch: `{v.branch}`\n")
                         f.write(f"  - Checkout: Line {v.checkout_line} - `{v.checkout_ref}`\n")
-                        f.write(f"  - Execution: Line {v.exec_line} - {v.exec_type}: `{v.exec_value}`\n")
+                        f.write(
+                            f"  - Execution: Line {v.exec_line} - {v.exec_type}: `{v.exec_value}`\n"
+                        )
                         if v.protection_detail:
                             f.write(f"  - Protection: {v.protection_detail}\n")
                         f.write("\n")
@@ -100,9 +100,7 @@ def generate_markdown_report(
         # Protected section (if requested)
         if include_protected and protected:
             f.write("## PROTECTED VULNERABILITIES\n\n")
-            f.write(
-                "These workflows have protection mechanisms that prevent exploitation.\n\n"
-            )
+            f.write("These workflows have protection mechanisms that prevent exploitation.\n\n")
 
             by_repo: dict[str, list[VulnerableJob]] = defaultdict(list)
             for v in protected:

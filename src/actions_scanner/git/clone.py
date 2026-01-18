@@ -1,4 +1,5 @@
 """Sparse cloning operations for GitHub repositories."""
+
 import asyncio
 import re
 import shutil
@@ -7,6 +8,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from actions_scanner.utils.path import encode_branch
 
 
 class CloneResult(Enum):
@@ -91,6 +94,15 @@ class SparseCloner:
         assert proc.returncode is not None
         return proc.returncode, stdout.decode(), stderr.decode()
 
+    async def _get_current_branch(self, repo_dir: Path) -> str:
+        """Get the current branch name for a repo."""
+        returncode, stdout, _stderr = await self._run_git_command(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir
+        )
+        if returncode == 0:
+            return stdout.strip()
+        return ""
+
     async def clone_sparse(self, repo_url: str, dest_dir: Path) -> tuple[bool, str | None]:
         """Clone repository with sparse checkout.
 
@@ -137,9 +149,7 @@ class SparseCloner:
             sparse_checkout_file.write_text("\n".join(self.sparse_paths) + "\n")
 
             # Checkout the default branch
-            returncode, _, stderr = await self._run_git_command(
-                ["git", "checkout"], cwd=dest_dir
-            )
+            returncode, _, stderr = await self._run_git_command(["git", "checkout"], cwd=dest_dir)
             if returncode != 0:
                 return False, stderr.strip()
 
@@ -148,9 +158,7 @@ class SparseCloner:
         except Exception as e:
             return False, str(e)
 
-    async def process_repo(
-        self, repo_url: str, repos_dir: Path
-    ) -> tuple[str, CloneResult]:
+    async def process_repo(self, repo_url: str, repos_dir: Path) -> tuple[str, CloneResult]:
         """Process a single repository clone operation.
 
         Args:
@@ -165,23 +173,35 @@ class SparseCloner:
         if not repo_name:
             return repo_url, CloneResult.FAILED
 
-        # Use owner__repo format to avoid naming collisions
-        # Double underscore is unlikely to appear in org/repo names
-        repo_dir_name = repo_name.replace("/", "__")
-        dest_dir = repos_dir / repo_dir_name
+        owner, repo = repo_name.split("/", 1)
+        base_dir = repos_dir / owner / repo
 
-        # Skip if already exists
-        if dest_dir.exists():
+        # Skip if already exists with content
+        if base_dir.exists() and any(base_dir.iterdir()):
             return repo_name, CloneResult.SKIPPED
 
+        temp_dir = base_dir / "_tmp_clone"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir.parent.mkdir(parents=True, exist_ok=True)
+
         # Attempt to clone
-        success, _ = await self.clone_sparse(repo_url, dest_dir)
+        success, _ = await self.clone_sparse(repo_url, temp_dir)
         if success:
+            branch = await self._get_current_branch(temp_dir)
+            branch_dir = encode_branch(branch or "default")
+            dest_dir = base_dir / branch_dir / "code"
+            dest_dir.parent.mkdir(parents=True, exist_ok=True)
+            if dest_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return repo_name, CloneResult.SKIPPED
+
+            shutil.move(str(temp_dir), str(dest_dir))
             return repo_name, CloneResult.SUCCESS
         else:
             # Clean up failed clone attempt
-            if dest_dir.exists():
-                shutil.rmtree(dest_dir, ignore_errors=True)
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
             return repo_name, CloneResult.FAILED
 
     async def clone_repos(

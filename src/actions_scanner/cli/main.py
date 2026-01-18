@@ -1,6 +1,10 @@
 """Main CLI entry point for actions-scanner."""
 
 import asyncio
+import json
+import os
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -46,8 +50,97 @@ def cli(ctx: click.Context, config: Path | None, verbose: bool, no_banner: bool)
         print_banner()
 
 
+def _is_repo_url(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith(("https://", "http://", "git@")) and "github.com" in lowered
+
+
+def _looks_like_org_repo(value: str) -> bool:
+    return "/" in value and not value.startswith((".", "/"))
+
+
+def _normalize_repo_target(value: str) -> str:
+    if _is_repo_url(value):
+        return value
+    if _looks_like_org_repo(value):
+        return f"https://github.com/{value}"
+    return value
+
+
+def _read_targets_file(path: Path) -> list[str]:
+    targets: list[str] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            targets.append(line)
+    return targets
+
+
+def _expand_targets(target: str) -> list[str]:
+    target_path = Path(target)
+    if target_path.exists() and target_path.is_file():
+        return _read_targets_file(target_path)
+    return [target]
+
+
+def _collect_code_dirs(base_dir: Path) -> list[Path]:
+    return [p for p in base_dir.glob("*/*/*/code") if p.is_dir()]
+
+
+def _default_output_path(output_format: str) -> Path:
+    suffix = {"csv": ".csv", "json": ".json", "markdown": ".md"}[output_format]
+    return Path("outputs") / f"vulnerabilities{suffix}"
+
+
+def _find_repo_dir_from_path(path: Path) -> Path | None:
+    for parent in [path, *path.parents]:
+        git_path = parent / ".git"
+        if git_path.exists():
+            return parent
+    return None
+
+
+def _apply_validation_to_json_report(
+    report: dict,
+    validations: list[dict],
+) -> dict:
+    validation_index = {}
+    for entry in validations:
+        key = (
+            entry.get("org", ""),
+            entry.get("repo", ""),
+            entry.get("branch", ""),
+        )
+        validation_index[key] = entry
+
+    for vuln in report.get("vulnerabilities", []):
+        key = (
+            vuln.get("org", ""),
+            vuln.get("repo", ""),
+            vuln.get("branch", ""),
+        )
+        validation = validation_index.get(key)
+        if validation:
+            vuln["issue_type"] = validation.get("issue_type", "")
+            vuln["cvss"] = validation.get("cvss")
+            vuln["cwe"] = validation.get("cwe", "")
+            vuln["validation"] = {
+                "result": validation.get("result", ""),
+                "confirmation_file": validation.get("confirmation_file"),
+                "summary": validation.get("summary", ""),
+                "confidence": validation.get("confidence", ""),
+            }
+
+    report["validations"] = validations
+    report.setdefault("metadata", {})
+    report["metadata"]["validated_at"] = datetime.now().isoformat()
+    return report
+
+
 @cli.command()
-@click.argument("target", type=click.Path(exists=True, path_type=Path))
+@click.argument("target", type=str)
 @click.option(
     "--output",
     "-o",
@@ -68,6 +161,18 @@ def cli(ctx: click.Context, config: Path | None, verbose: bool, no_banner: bool)
     help="Include permission-gated findings in output",
 )
 @click.option(
+    "--validate",
+    is_flag=True,
+    help="Run AI validation after scanning",
+)
+@click.option(
+    "--validate-agent",
+    type=str,
+    help='Custom validation agent command template (e.g., "codex -m gpt-4 -p {}")',
+)
+@click.option("--validate-workers", type=int, default=5, help="Parallel validation workers")
+@click.option("--validate-timeout", type=int, default=300, help="Timeout per repo in seconds")
+@click.option(
     "--all-branches",
     is_flag=True,
     help="Scan all branches using smart sampling (default + oldest + newest + random)",
@@ -78,40 +183,115 @@ def cli(ctx: click.Context, config: Path | None, verbose: bool, no_banner: bool)
     default=10,
     help="Maximum branches per repo when using --all-branches",
 )
+@click.option("--clone-workers", type=int, default=5, help="Parallel clone workers")
 @click.pass_context
 def scan(
     ctx: click.Context,
-    target: Path,
+    target: str,
     output: Path | None,
     output_format: str,
     include_protected: bool,
+    validate: bool,
+    validate_agent: str | None,
+    validate_workers: int,
+    validate_timeout: int,
     all_branches: bool,
     max_branches: int,
+    clone_workers: int,
 ) -> None:
     """Scan repositories for PwnRequest vulnerabilities.
 
-    TARGET is a directory containing cloned repositories or workflow files.
+    TARGET can be a GitHub org name, a repo URL, a directory path, or a file
+    containing newline-separated repo URLs and/or directories.
 
     Use --all-branches to scan multiple branches per repo using smart sampling:
     default branch + oldest + newest + random sample up to --max-branches.
     """
     from actions_scanner.core import PwnRequestDetector
     from actions_scanner.core.models import ScanResult
-    from actions_scanner.git import MultiBranchScanner
+    from actions_scanner.git import MultiBranchScanner, SparseCloner
+    from actions_scanner.github import GitHubClient, OrgScanner
     from actions_scanner.reporting import (
+        append_columns_to_csv,
         generate_csv_report,
         generate_json_report,
         generate_markdown_report,
     )
-    from actions_scanner.utils.console import print_info, print_success
+    from actions_scanner.utils.console import print_error, print_info, print_success, print_warning
+    from actions_scanner.utils.path import (
+        extract_org_repo_from_path,
+    )
+    from actions_scanner.validation import BatchValidationRunner, ValidationAgent
 
+    settings: Settings = ctx.obj["settings"]
     detector = PwnRequestDetector()
 
-    # Set up multi-branch scanning if requested
+    targets = _expand_targets(target)
+    local_dirs: list[Path] = []
+    repo_urls: list[str] = []
+    orgs: list[str] = []
+
+    for item in targets:
+        item_path = Path(item)
+        if item_path.exists():
+            if item_path.is_dir():
+                local_dirs.append(item_path)
+            else:
+                print_warning(f"Skipping unsupported target file: {item}")
+            continue
+
+        normalized = _normalize_repo_target(item)
+        if _is_repo_url(normalized) or _looks_like_org_repo(item):
+            repo_urls.append(normalized)
+        else:
+            orgs.append(item)
+
+    if not local_dirs and not repo_urls and not orgs:
+        print_error("No valid targets provided")
+        raise SystemExit(1)
+
+    if orgs:
+        token = settings.github.token or os.environ.get("GITHUB_TOKEN")
+        if not token:
+            print_error("GITHUB_TOKEN environment variable is required to scan orgs")
+            raise SystemExit(1)
+
+        async def discover_org_repos() -> list[str]:
+            async with GitHubClient(token=token, concurrency=settings.github.concurrency) as client:
+                scanner = OrgScanner(client)
+                results = []
+                for org in orgs:
+                    repos = await scanner.list_org_repos(
+                        org, include_archived=False, include_forks=False
+                    )
+                    results.extend([r.html_url for r in repos])
+                return results
+
+        org_repo_urls = asyncio.run(discover_org_repos())
+        repo_urls.extend(org_repo_urls)
+
+    repo_urls = sorted(set(repo_urls))
+
+    scan_base_dir: Path | None = None
+    if repo_urls:
+        scan_base_dir = Path(tempfile.mkdtemp(prefix="actions-scanner-"))
+        print_info(f"Cloning {len(repo_urls)} repositories to {scan_base_dir}...")
+        cloner = SparseCloner(concurrency=clone_workers)
+        asyncio.run(cloner.clone_repos(repo_urls, scan_base_dir))
+        print_info("Clone complete (temporary directory retained for analysis)")
+
+    result = ScanResult()
+
+    def scan_paths(paths: list[Path]) -> None:
+        for scan_path in paths:
+            path_result = detector.scan_directory(scan_path)
+            result.vulnerabilities.extend(path_result.vulnerabilities)
+            result.files_scanned += path_result.files_scanned
+            result.errors.extend(path_result.errors)
+
     if all_branches:
         print_info(f"Setting up multi-branch scanning (max {max_branches} branches per repo)...")
-
-        scanner = MultiBranchScanner(
+        mb_scanner = MultiBranchScanner(
             max_branches_per_repo=max_branches,
             concurrency=10,
         )
@@ -122,32 +302,30 @@ def scan(
             elif phase == "worktrees":
                 console.print(f"\r  Creating worktrees: {completed}/{total}       ", end="")
 
-        setup = asyncio.run(scanner.setup_worktrees(target, on_progress=on_mb_progress))
-        console.print()  # Newline after progress
-
-        total_branches = sum(len(b) for b in setup.branches_by_repo.values())
-        print_info(f"Created {setup.worktrees_created} worktrees for {total_branches} branches")
-
-        if setup.worktrees_failed > 0:
-            print_info(f"  ({setup.worktrees_failed} worktrees failed)")
-
-        # Scan all paths (repos + worktrees)
-        print_info(f"Scanning {len(setup.scan_paths)} paths...")
-
-        all_vulns = []
-        files_scanned = 0
-        for scan_path in setup.scan_paths:
-            path_result = detector.scan_directory(scan_path)
-            all_vulns.extend(path_result.vulnerabilities)
-            files_scanned += path_result.files_scanned
-
-        result = ScanResult(
-            files_scanned=files_scanned,
-            vulnerabilities=all_vulns,
-        )
+        base_dirs = list(local_dirs)
+        if scan_base_dir:
+            base_dirs.append(scan_base_dir)
+        for base_dir in base_dirs:
+            setup = asyncio.run(mb_scanner.setup_worktrees(base_dir, on_progress=on_mb_progress))
+            console.print()
+            total_branches = sum(len(b) for b in setup.branches_by_repo.values())
+            print_info(f"Created {setup.worktrees_created} worktrees for {total_branches} branches")
+            if setup.worktrees_failed > 0:
+                print_info(f"  ({setup.worktrees_failed} worktrees failed)")
+            print_info(f"Scanning {len(setup.scan_paths)} paths...")
+            scan_paths(setup.scan_paths)
     else:
-        print_info(f"Scanning {target}...")
-        result = detector.scan_directory(target)
+        for local_dir in local_dirs:
+            print_info(f"Scanning {local_dir}...")
+            scan_paths([local_dir])
+
+        if scan_base_dir:
+            code_dirs = _collect_code_dirs(scan_base_dir)
+            if not code_dirs:
+                print_warning(f"No repo directories found under {scan_base_dir}")
+            else:
+                print_info(f"Scanning {len(code_dirs)} cloned repositories...")
+                scan_paths(code_dirs)
 
     print_info(f"Scanned {result.files_scanned} workflow files")
     print_info(f"Found {len(result.vulnerabilities)} potential vulnerabilities")
@@ -159,14 +337,77 @@ def scan(
         print_info(f"Filtered to {len(vulns)} exploitable vulnerabilities")
 
     if output is None:
-        suffix = {"csv": ".csv", "json": ".json", "markdown": ".md"}[output_format]
-        output = Path(f"vulnerabilities{suffix}")
+        output = _default_output_path(output_format)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    validation_results: list[dict] = []
+    if validate and vulns:
+        command_template = validate_agent or settings.validation.command_template
+        validation_agent = ValidationAgent(
+            command_template=command_template,
+            timeout=validate_timeout,
+        )
+        runner = BatchValidationRunner(agent=validation_agent, concurrency=validate_workers)
+
+        repo_map: dict[tuple[str, str, str], dict] = {}
+        for v in vulns:
+            org, repo = extract_org_repo_from_path(str(v.workflow_path))
+            key = (org, repo, v.branch)
+            if key not in repo_map:
+                repo_map[key] = {
+                    "org": org,
+                    "repo": repo,
+                    "branch": v.branch,
+                    "workflow_paths": [],
+                    "working_dir": None,
+                }
+            repo_map[key]["workflow_paths"].append(str(v.workflow_path))
+            if repo_map[key]["working_dir"] is None:
+                repo_dir = _find_repo_dir_from_path(Path(v.workflow_path))
+                if repo_dir:
+                    repo_map[key]["working_dir"] = repo_dir
+
+        repo_list = list(repo_map.values())
+        print_info(
+            f"Validating {len(repo_list)} repositories with {validate_workers} parallel agents..."
+        )
+        results = asyncio.run(runner.validate_repos(repo_list, scan_base_dir or output.parent))
+        validation_results = [r.to_dict() for r in results]
 
     # Generate report
     if output_format == "csv":
         generate_csv_report(vulns, output, include_protected=include_protected)
+        if validate and vulns:
+            validation_index = {
+                (v.get("org", ""), v.get("repo", ""), v.get("branch", "")): v
+                for v in validation_results
+            }
+            append_columns_to_csv(
+                output,
+                output,
+                {
+                    "issue_type": lambda row: validation_index.get(
+                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
+                    ).get("issue_type", ""),
+                    "cvss": lambda row: validation_index.get(
+                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
+                    ).get("cvss", ""),
+                    "cwe": lambda row: validation_index.get(
+                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
+                    ).get("cwe", ""),
+                    "confirmation_file": lambda row: validation_index.get(
+                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
+                    ).get("confirmation_file", ""),
+                },
+            )
     elif output_format == "json":
-        generate_json_report(vulns, output, include_protected=include_protected)
+        generate_json_report(
+            vulns,
+            output,
+            include_protected=include_protected,
+            scan_base_dir=scan_base_dir,
+            validations=validation_results if validate else None,
+        )
     else:
         generate_markdown_report(vulns, output, include_protected=include_protected)
 
@@ -273,12 +514,21 @@ def validate(
     Runs an AI agent to confirm or reject scanner findings.
     Creates confirmed_vulnerable.txt, confirmed_weakness.txt, or not_vulnerable.txt.
     """
+    import csv
+
     from rich.live import Live
     from rich.table import Table
 
-    from actions_scanner.reporting import read_vulnerabilities_csv, read_vulnerabilities_json
+    from actions_scanner.reporting import (
+        load_json_report,
+        read_vulnerabilities_csv,
+        read_vulnerabilities_json,
+    )
     from actions_scanner.utils.console import is_terminal, print_info, print_success, print_warning
-    from actions_scanner.utils.path import extract_org_repo_from_path
+    from actions_scanner.utils.path import (
+        extract_org_repo_branch_from_path,
+        extract_org_repo_from_path,
+    )
     from actions_scanner.validation import BatchValidationRunner, ValidationAgent
 
     settings: Settings = ctx.obj["settings"]
@@ -291,8 +541,12 @@ def validate(
     suffix = vulnerabilities_file.suffix.lower()
     if suffix == ".json":
         vulns = read_vulnerabilities_json(vulnerabilities_file)
+        report_data = load_json_report(vulnerabilities_file)
     else:
         vulns = read_vulnerabilities_csv(vulnerabilities_file)
+        report_data = {"vulnerabilities": vulns, "metadata": {}}
+    if not isinstance(report_data, dict):
+        report_data = {"vulnerabilities": vulns, "metadata": {}}
     print_info(f"Found {len(vulns)} vulnerability records")
 
     normalized_vulns = []
@@ -300,6 +554,7 @@ def validate(
     for v in vulns:
         org = v.get("org", "") or ""
         repo = v.get("repo", "") or ""
+        branch = v.get("branch", "") or ""
         if (not org or not repo) and v.get("workflow_path"):
             inferred_org, inferred_repo = extract_org_repo_from_path(
                 str(v.get("workflow_path", ""))
@@ -308,28 +563,47 @@ def validate(
                 org = inferred_org
             if not repo:
                 repo = inferred_repo
+        if not branch and v.get("workflow_path"):
+            _org, _repo, inferred_branch = extract_org_repo_branch_from_path(
+                str(v.get("workflow_path", ""))
+            )
+            if inferred_branch:
+                branch = inferred_branch
         if not repo:
             skipped += 1
             continue
         v["org"] = org
         v["repo"] = repo
+        v["branch"] = branch
         normalized_vulns.append(v)
 
     if skipped:
         print_warning(f"Skipped {skipped} records without a resolvable repository")
 
-    # Group by repo
-    repos: dict[tuple[str, str], list[str]] = {}
+    if isinstance(report_data, dict):
+        report_data["vulnerabilities"] = normalized_vulns
+
+    # Group by repo + branch
+    repos: dict[tuple[str, str, str], dict] = {}
     for v in normalized_vulns:
         key = (v.get("org", ""), v.get("repo", ""))
-        if key not in repos:
-            repos[key] = []
-        repos[key].append(v.get("workflow_path", ""))
+        branch = v.get("branch", "") or ""
+        full_key = (key[0], key[1], branch)
+        if full_key not in repos:
+            repos[full_key] = {
+                "org": key[0],
+                "repo": key[1],
+                "branch": branch,
+                "workflow_paths": [],
+                "working_dir": None,
+            }
+        repos[full_key]["workflow_paths"].append(v.get("workflow_path", ""))
+        if repos[full_key]["working_dir"] is None and v.get("workflow_path"):
+            repo_dir = _find_repo_dir_from_path(Path(str(v.get("workflow_path"))))
+            if repo_dir:
+                repos[full_key]["working_dir"] = repo_dir
 
-    repo_list = [
-        {"org": org, "repo": repo, "workflow_paths": paths}
-        for (org, repo), paths in repos.items()
-    ]
+    repo_list = list(repos.values())
 
     print_info(f"Validating {len(repo_list)} repositories with {workers} parallel agents...")
     console.print()
@@ -389,24 +663,38 @@ def validate(
     if repos_dir:
         base_dir = repos_dir
     else:
-        # Fallback: check for scan-output.txt or use parent directory
-        base_dir = vulnerabilities_file.parent / "scan-output.txt"
-        if not base_dir.exists():
+        base_dir = None
+        if isinstance(report_data, dict):
+            metadata = report_data.get("metadata")
+            if isinstance(metadata, dict):
+                scan_base = metadata.get("scan_base_dir")
+                if scan_base:
+                    base_dir = Path(str(scan_base))
+        if base_dir is None:
             base_dir = vulnerabilities_file.parent
+
+    validation_results: list = []
 
     # Run with live progress display
     async def run_with_progress() -> None:
+        nonlocal validation_results
         if is_terminal():
-            with Live(make_progress_table(0, len(repo_list)), refresh_per_second=2, console=console) as live:
+            with Live(
+                make_progress_table(0, len(repo_list)), refresh_per_second=2, console=console
+            ) as live:
                 original_callback = on_progress
 
                 def live_progress(completed: int, total: int, result) -> None:
                     original_callback(completed, total, result)
                     live.update(make_progress_table(completed, total))
 
-                await runner.validate_repos(repo_list, base_dir, on_progress=live_progress)
+                validation_results = await runner.validate_repos(
+                    repo_list, base_dir, on_progress=live_progress
+                )
         else:
-            await runner.validate_repos(repo_list, base_dir, on_progress=on_progress)
+            validation_results = await runner.validate_repos(
+                repo_list, base_dir, on_progress=on_progress
+            )
 
     asyncio.run(run_with_progress())
 
@@ -420,6 +708,39 @@ def validate(
     console.print(f"  [yellow]● Weakness:[/]       {stats.weakness}")
     console.print(f"  [green]● False positive:[/] {stats.false_positive}")
     console.print(f"  [dim]● Failed:[/]         {stats.failed}")
+
+    validations = [r.to_dict() for r in validation_results]
+
+    if output is None:
+        output = vulnerabilities_file.with_name(f"{vulnerabilities_file.stem}-validated.json")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if output.suffix.lower() == ".csv":
+        validation_index = {
+            (v.get("org", ""), v.get("repo", ""), v.get("branch", "")): v for v in validations
+        }
+        rows = [dict(v) for v in normalized_vulns]
+        for row in rows:
+            validation = validation_index.get(
+                (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
+            )
+            row["issue_type"] = validation.get("issue_type", "")
+            row["cvss"] = validation.get("cvss", "")
+            row["cwe"] = validation.get("cwe", "")
+            row["confirmation_file"] = validation.get("confirmation_file", "")
+
+        fieldnames = list(rows[0].keys()) if rows else []
+        with output.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+    else:
+        report_data = _apply_validation_to_json_report(report_data, validations)
+        with output.open("w", encoding="utf-8") as f:
+            json.dump(report_data, f, indent=2)
+
+    print_success(f"Validated report written to {output}")
 
 
 @cli.command()
@@ -592,7 +913,7 @@ def report(
     "--output-dir",
     "-d",
     type=click.Path(path_type=Path),
-    default="repos",
+    default=None,
     help="Directory to clone repositories into",
 )
 @click.option(
@@ -650,7 +971,7 @@ def report(
 def scan_org(
     ctx: click.Context,
     org: str,
-    output_dir: Path,
+    output_dir: Path | None,
     output: Path | None,
     output_format: str,
     include_forks: bool,
@@ -707,12 +1028,17 @@ def scan_org(
     token = settings.github.token
     if not token:
         import os
+
         token = os.environ.get("GITHUB_TOKEN")
     if not token:
         print_error("GITHUB_TOKEN environment variable is required")
         raise SystemExit(1)
 
     print_info(f"Discovering repositories in '{org}'...")
+
+    if output_dir is None:
+        output_dir = Path(tempfile.mkdtemp(prefix="actions-scanner-"))
+        print_info(f"Using temporary directory {output_dir}")
 
     async def discover_repos() -> list[tuple[str, str]]:
         """Discover all repos in the org."""
@@ -778,8 +1104,11 @@ def scan_org(
             return table
 
         if is_terminal():
+
             async def clone_with_progress() -> None:
-                with Live(make_clone_table(0, len(repo_urls)), refresh_per_second=2, console=console) as live:
+                with Live(
+                    make_clone_table(0, len(repo_urls)), refresh_per_second=2, console=console
+                ) as live:
                     completed = 0
 
                     def live_progress(c: int, t: int, name: str, result) -> None:
@@ -865,14 +1194,14 @@ def scan_org(
     print_info(f"Filtered to {len(vulns)} exploitable vulnerabilities")
 
     if output is None:
-        suffix = {"csv": ".csv", "json": ".json", "markdown": ".md"}[output_format]
-        output = Path(f"vulnerabilities{suffix}")
+        output = _default_output_path(output_format)
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     # Generate report
     if output_format == "csv":
         generate_csv_report(vulns, output, include_protected=False)
     elif output_format == "json":
-        generate_json_report(vulns, output, include_protected=False)
+        generate_json_report(vulns, output, include_protected=False, scan_base_dir=output_dir)
     else:
         generate_markdown_report(vulns, output, include_protected=False)
 

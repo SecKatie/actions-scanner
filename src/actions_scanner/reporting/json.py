@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from actions_scanner.core.models import VulnerableJob
-from actions_scanner.utils.path import extract_org_repo_from_path, repo_display_name
+from actions_scanner.utils.path import (
+    extract_org_repo_branch_from_path,
+    extract_org_repo_from_path,
+    repo_display_name,
+)
 
 
 def generate_json_report(
@@ -14,6 +18,8 @@ def generate_json_report(
     output_path: Path,
     include_protected: bool = False,
     pretty: bool = True,
+    scan_base_dir: Path | None = None,
+    validations: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Generate a JSON report of vulnerable workflows.
 
@@ -31,18 +37,28 @@ def generate_json_report(
         vulnerabilities = [v for v in vulnerabilities if v.is_exploitable()]
 
     # Build report structure
-    report = {
-        "metadata": {
-            "generated_at": datetime.now().isoformat(),
-            "total_findings": len(vulnerabilities),
-            "include_protected": include_protected,
-        },
+    validation_index = _build_validation_index(validations or [])
+    metadata: dict[str, Any] = {
+        "generated_at": datetime.now().isoformat(),
+        "total_findings": len(vulnerabilities),
+        "include_protected": include_protected,
+    }
+    if scan_base_dir:
+        metadata["scan_base_dir"] = str(scan_base_dir)
+
+    report: dict[str, Any] = {
+        "metadata": metadata,
         "summary": {
             "by_protection": _count_by_protection(vulnerabilities),
             "unique_repos": len(_get_unique_repos(vulnerabilities)),
         },
-        "vulnerabilities": [_vuln_to_dict(v) for v in vulnerabilities],
+        "vulnerabilities": [
+            _vuln_to_dict(v, validation_index.get(_vuln_key(v))) for v in vulnerabilities
+        ],
     }
+
+    if validations:
+        report["validations"] = validations
 
     with output_path.open("w", encoding="utf-8") as f:
         if pretty:
@@ -91,7 +107,14 @@ def generate_exploitable_json(
     return output_path
 
 
-def _vuln_to_dict(v: VulnerableJob) -> dict[str, Any]:
+def _vuln_key(v: VulnerableJob) -> tuple[str, str, str]:
+    """Build a repo key for validation matching."""
+    org, repo = _extract_org_repo(str(v.workflow_path))
+    branch = v.branch or ""
+    return org, repo, branch
+
+
+def _vuln_to_dict(v: VulnerableJob, validation: dict[str, Any] | None = None) -> dict[str, Any]:
     """Convert VulnerableJob to dictionary.
 
     Note: This preserves raw values including multiline content,
@@ -100,7 +123,7 @@ def _vuln_to_dict(v: VulnerableJob) -> dict[str, Any]:
     path_str = str(v.workflow_path)
     org, repo = _extract_org_repo(path_str)
 
-    return {
+    record = {
         "org": org,
         "repo": repo,
         "workflow_path": path_str,
@@ -122,6 +145,19 @@ def _vuln_to_dict(v: VulnerableJob) -> dict[str, Any]:
         "has_authorization_gate": v.has_authorization,
         "is_exploitable": v.is_exploitable(),
     }
+
+    if validation:
+        record["issue_type"] = validation.get("issue_type", "")
+        record["cvss"] = validation.get("cvss")
+        record["cwe"] = validation.get("cwe", "")
+        record["validation"] = {
+            "result": validation.get("result", ""),
+            "confirmation_file": validation.get("confirmation_file"),
+            "summary": validation.get("summary", ""),
+            "confidence": validation.get("confidence", ""),
+        }
+
+    return record
 
 
 def _count_by_protection(vulnerabilities: list[VulnerableJob]) -> dict[str, int]:
@@ -205,6 +241,7 @@ def _normalize_json_records(records: list[dict[str, Any]]) -> list[dict[str, Any
     for record in records:
         org = record.get("org", "") or ""
         repo = record.get("repo", "") or ""
+        branch = record.get("branch", "") or ""
         if (not org or not repo) and record.get("workflow_path"):
             inferred_org, inferred_repo = extract_org_repo_from_path(
                 str(record.get("workflow_path", ""))
@@ -213,7 +250,28 @@ def _normalize_json_records(records: list[dict[str, Any]]) -> list[dict[str, Any
                 org = inferred_org
             if not repo:
                 repo = inferred_repo
+        if not branch and record.get("workflow_path"):
+            _org, _repo, inferred_branch = extract_org_repo_branch_from_path(
+                str(record.get("workflow_path", ""))
+            )
+            if inferred_branch:
+                branch = inferred_branch
         record["org"] = org
         record["repo"] = repo
+        record["branch"] = branch
         normalized.append(record)
     return normalized
+
+
+def _build_validation_index(
+    validations: list[dict[str, Any]],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """Build lookup from validation records."""
+    index: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for v in validations:
+        org = v.get("org", "") or ""
+        repo = v.get("repo", "") or ""
+        branch = v.get("branch", "") or ""
+        key = (org, repo, branch)
+        index[key] = v
+    return index

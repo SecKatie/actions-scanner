@@ -65,9 +65,7 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Generate reports" in result.output
 
-    def test_scan_directory(
-        self, runner: CliRunner, workflows_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_scan_directory(self, runner: CliRunner, workflows_dir: Path, tmp_path: Path) -> None:
         """Test scanning a directory."""
         output_file = tmp_path / "vulnerabilities.csv"
 

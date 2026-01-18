@@ -2,7 +2,7 @@
 
 # Default validation prompt template
 # Placeholders: {org}, {repo}, {workflow_list}
-DEFAULT_VALIDATION_PROMPT = '''You are a security researcher analyzing GitHub workflows for PwnRequest vulnerabilities in the {org}/{repo} repository.
+DEFAULT_VALIDATION_PROMPT = """You are a security researcher analyzing GitHub workflows for PwnRequest vulnerabilities in the {org}/{repo} repository.
 
 IMPORTANT: You MUST read and analyze each of the following workflow files. These files have already been flagged by an automated scanner as potentially vulnerable. Your job is to confirm the vulnerability and document how to exploit it.
 
@@ -28,6 +28,22 @@ Create this if workflows require approval (labels, maintainer review) but are st
 
 OPTION C - not_vulnerable.txt:
 Create this if the automated scanner flagged a FALSE POSITIVE. Document why the workflow is NOT actually vulnerable.
+
+IMPORTANT OUTPUT FORMAT:
+At the very top of the file you create, include YAML frontmatter with these fields:
+
+---
+issue_type: vulnerability|weakness|false_positive
+cvss: <number 0.0-10.0>
+cwe: CWE-###
+summary: "<one sentence summary>"
+confidence: high|medium|low
+---
+
+The issue_type MUST align with the file you create:
+- confirmed_vulnerable.txt -> issue_type: vulnerability
+- confirmed_weakness.txt -> issue_type: weakness
+- not_vulnerable.txt -> issue_type: false_positive
 
 For EACH workflow, document:
 
@@ -65,7 +81,7 @@ For NOT VULNERABLE (false positive) workflows, document:
 
 ---
 
-CRITICAL: You MUST create exactly ONE of these files: confirmed_vulnerable.txt, confirmed_weakness.txt, or not_vulnerable.txt. Every flagged workflow must be documented in whichever file you create.'''
+CRITICAL: You MUST create exactly ONE of these files: confirmed_vulnerable.txt, confirmed_weakness.txt, or not_vulnerable.txt. Every flagged workflow must be documented in whichever file you create."""
 
 
 def build_validation_prompt(
@@ -98,7 +114,7 @@ def build_validation_prompt(
 
 
 # Shorter prompt for quick validation
-QUICK_VALIDATION_PROMPT = '''Analyze these GitHub workflows in {org}/{repo} for PwnRequest vulnerabilities:
+QUICK_VALIDATION_PROMPT = """Analyze these GitHub workflows in {org}/{repo} for PwnRequest vulnerabilities:
 
 {workflow_list}
 
@@ -109,7 +125,10 @@ Create one of:
 - confirmed_weakness.txt (exploitable with approval)
 - not_vulnerable.txt (false positive)
 
-Document the vulnerability or why it's safe.'''
+Include YAML frontmatter at the top of the file with:
+issue_type, cvss, cwe, summary, confidence.
+
+Document the vulnerability or why it's safe."""
 
 
 def build_quick_prompt(

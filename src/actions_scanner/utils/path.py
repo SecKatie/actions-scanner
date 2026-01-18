@@ -1,6 +1,7 @@
 """Path and identifier helpers."""
 
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 _BASE_DIR_NAMES = {
     "repos",
@@ -57,6 +58,10 @@ def extract_org_repo_from_path(path_str: str) -> tuple[str, str]:
     if not path_str:
         return "", ""
 
+    org, repo, _branch = extract_org_repo_branch_from_path(path_str)
+    if org or repo:
+        return org, repo
+
     parts = [p for p in _normalize_path(path_str).split("/") if p]
     for i, part in enumerate(parts):
         if part != ".github":
@@ -103,6 +108,46 @@ def extract_org_repo_from_path(path_str: str) -> tuple[str, str]:
     return "", ""
 
 
+def encode_branch(branch: str) -> str:
+    """Encode a branch name for safe filesystem usage."""
+    return quote(branch, safe="")
+
+
+def decode_branch(encoded: str) -> str:
+    """Decode a previously encoded branch name."""
+    return unquote(encoded)
+
+
+def extract_org_repo_branch_from_path(path_str: str) -> tuple[str, str, str]:
+    """Extract org, repo, and branch from a workflow or repo path."""
+    if not path_str:
+        return "", "", ""
+
+    parts = [p for p in _normalize_path(path_str).split("/") if p]
+    for i, part in enumerate(parts):
+        if part != "code":
+            continue
+
+        if i >= 3:
+            org = parts[i - 3]
+            repo = parts[i - 2]
+            branch = decode_branch(parts[i - 1])
+            return org, repo, branch
+
+    for i, part in enumerate(parts):
+        if part != ".github":
+            continue
+
+        if i >= 3:
+            candidate_branch = decode_branch(parts[i - 1])
+            if _looks_like_branch(candidate_branch) or "%" in parts[i - 1]:
+                org = parts[i - 3]
+                repo = parts[i - 2]
+                return org, repo, candidate_branch
+
+    return "", "", ""
+
+
 def repo_display_name(path_str: str) -> str:
     """Get a display-friendly repo name from a workflow path."""
     org, repo = extract_org_repo_from_path(path_str)
@@ -113,15 +158,28 @@ def repo_display_name(path_str: str) -> str:
     return "unknown"
 
 
-def resolve_repo_dir(base_dir: Path, org: str, repo: str) -> tuple[Path, bool]:
+def resolve_repo_dir(
+    base_dir: Path, org: str, repo: str, branch: str | None = None
+) -> tuple[Path, bool]:
     """Resolve the most likely repo directory under base_dir."""
     candidates: list[Path] = []
     if org and repo:
-        candidates.extend([
-            base_dir / f"{org}__{repo}",
-            base_dir / f"{org}-{repo}",
-            base_dir / org / repo,
-        ])
+        if branch:
+            encoded = encode_branch(branch)
+            candidates.extend(
+                [
+                    base_dir / org / repo / encoded / "code",
+                    base_dir / f"{org}__{repo}" / encoded / "code",
+                    base_dir / f"{org}-{repo}" / encoded / "code",
+                ]
+            )
+        candidates.extend(
+            [
+                base_dir / f"{org}__{repo}",
+                base_dir / f"{org}-{repo}",
+                base_dir / org / repo,
+            ]
+        )
     if repo:
         candidates.append(base_dir / repo)
 

@@ -26,6 +26,6 @@ __all__ = [
     "generate_summary_report",
     "generate_vulnerabilities_csv",
     "load_json_report",
-    "read_vulnerabilities_json",
     "read_vulnerabilities_csv",
+    "read_vulnerabilities_json",
 ]

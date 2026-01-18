@@ -18,15 +18,17 @@ from rich.table import Table
 from rich.theme import Theme
 
 # Custom theme for the application
-SCANNER_THEME = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "red bold",
-    "success": "green",
-    "highlight": "magenta",
-    "dim": "dim",
-    "bold": "bold",
-})
+SCANNER_THEME = Theme(
+    {
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "red bold",
+        "success": "green",
+        "highlight": "magenta",
+        "dim": "dim",
+        "bold": "bold",
+    }
+)
 
 # Global console instance
 console = Console(theme=SCANNER_THEME)
