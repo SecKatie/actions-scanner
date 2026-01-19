@@ -12,6 +12,8 @@ class ProtectionLevel(str, Enum):
     LABEL = "label"  # Requires maintainer to add label (social engineering vector)
     PERMISSION = "permission"  # Requires PR author to have write/admin/maintain access
     SAME_REPO = "same_repo"  # Only runs for PRs from same repo (not forks)
+    ACTOR = "actor"  # Only runs for specific bot actors (not exploitable by external)
+    MERGED = "merged"  # Only runs on merged PRs (code already reviewed)
 
 
 class ExecType(str, Enum):
@@ -79,6 +81,8 @@ class ScanResult:
             ProtectionLevel.LABEL.value: 0,
             ProtectionLevel.PERMISSION.value: 0,
             ProtectionLevel.SAME_REPO.value: 0,
+            ProtectionLevel.ACTOR.value: 0,
+            ProtectionLevel.MERGED.value: 0,
         }
         for v in self.vulnerabilities:
             counts[v.protection] = counts.get(v.protection, 0) + 1

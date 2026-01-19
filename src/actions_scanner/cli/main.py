@@ -156,9 +156,19 @@ def _apply_validation_to_json_report(
     help="Output format",
 )
 @click.option(
-    "--include-protected",
+    "--no-protected",
     is_flag=True,
-    help="Include permission-gated findings in output",
+    help="Exclude permission-gated findings",
+)
+@click.option(
+    "--no-labeled",
+    is_flag=True,
+    help="Exclude label-gated findings",
+)
+@click.option(
+    "--include-same-repo",
+    is_flag=True,
+    help="Include same-repo-only findings (excluded by default)",
 )
 @click.option(
     "--validate",
@@ -184,13 +194,27 @@ def _apply_validation_to_json_report(
     help="Maximum branches per repo when using --all-branches",
 )
 @click.option("--clone-workers", type=int, default=5, help="Parallel clone workers")
+@click.option(
+    "--full-history",
+    is_flag=True,
+    default=False,
+    help="Fetch full git history instead of shallow clone (larger .git folders)",
+)
+@click.option(
+    "--single-branch",
+    is_flag=True,
+    default=False,
+    help="Only fetch default branch (smaller .git but no multi-branch scanning)",
+)
 @click.pass_context
 def scan(
     ctx: click.Context,
     target: str,
     output: Path | None,
     output_format: str,
-    include_protected: bool,
+    no_protected: bool,
+    no_labeled: bool,
+    include_same_repo: bool,
     validate: bool,
     validate_agent: str | None,
     validate_workers: int,
@@ -198,6 +222,8 @@ def scan(
     all_branches: bool,
     max_branches: int,
     clone_workers: int,
+    full_history: bool,
+    single_branch: bool,
 ) -> None:
     """Scan repositories for PwnRequest vulnerabilities.
 
@@ -276,7 +302,11 @@ def scan(
     if repo_urls:
         scan_base_dir = Path(tempfile.mkdtemp(prefix="actions-scanner-"))
         print_info(f"Cloning {len(repo_urls)} repositories to {scan_base_dir}...")
-        cloner = SparseCloner(concurrency=clone_workers)
+        cloner = SparseCloner(
+            concurrency=clone_workers,
+            shallow=not full_history,
+            single_branch=single_branch,
+        )
         asyncio.run(cloner.clone_repos(repo_urls, scan_base_dir))
         print_info("Clone complete (temporary directory retained for analysis)")
 
@@ -330,11 +360,20 @@ def scan(
     print_info(f"Scanned {result.files_scanned} workflow files")
     print_info(f"Found {len(result.vulnerabilities)} potential vulnerabilities")
 
-    # Filter if not including protected
+    # Filter vulnerabilities based on flags
     vulns = result.vulnerabilities
-    if not include_protected:
-        vulns = [v for v in vulns if v.is_exploitable()]
-        print_info(f"Filtered to {len(vulns)} exploitable vulnerabilities")
+    excluded_protections: list[str] = []
+    if no_protected:
+        excluded_protections.append("permission")
+    if no_labeled:
+        excluded_protections.append("label")
+    if not include_same_repo:
+        excluded_protections.append("same_repo")
+    if excluded_protections:
+        vulns = [v for v in vulns if v.protection not in excluded_protections]
+        print_info(
+            f"Filtered to {len(vulns)} vulnerabilities (excluded: {', '.join(excluded_protections)})"
+        )
 
     if output is None:
         output = _default_output_path(output_format)
@@ -374,9 +413,9 @@ def scan(
         results = asyncio.run(runner.validate_repos(repo_list, scan_base_dir or output.parent))
         validation_results = [r.to_dict() for r in results]
 
-    # Generate report
+    # Generate report (include_protected=True since filtering is done above)
     if output_format == "csv":
-        generate_csv_report(vulns, output, include_protected=include_protected)
+        generate_csv_report(vulns, output, include_protected=True)
         if validate and vulns:
             validation_index = {
                 (v.get("org", ""), v.get("repo", ""), v.get("branch", "")): v
@@ -404,12 +443,12 @@ def scan(
         generate_json_report(
             vulns,
             output,
-            include_protected=include_protected,
+            include_protected=True,
             scan_base_dir=scan_base_dir,
             validations=validation_results if validate else None,
         )
     else:
-        generate_markdown_report(vulns, output, include_protected=include_protected)
+        generate_markdown_report(vulns, output, include_protected=True)
 
     print_success(f"Report written to {output}")
 
@@ -432,17 +471,34 @@ def scan(
     help="Output directory for cloned repos",
 )
 @click.option("--workers", "-w", type=int, default=5, help="Parallel clone workers")
+@click.option(
+    "--full-history",
+    is_flag=True,
+    default=False,
+    help="Fetch full git history instead of shallow clone (larger .git folders)",
+)
+@click.option(
+    "--single-branch",
+    is_flag=True,
+    default=False,
+    help="Only fetch default branch (smaller .git but no multi-branch scanning)",
+)
 @click.pass_context
 def clone(
     ctx: click.Context,
     repos_file: Path,
     output_dir: Path,
     workers: int,
+    full_history: bool,
+    single_branch: bool,
 ) -> None:
     """Clone repositories with sparse checkout.
 
     REPOS_FILE contains one repository URL per line.
     Only .github/ directories are checked out for efficient scanning.
+
+    By default, uses shallow clones (--depth=1) with all branches for minimal
+    .git folder size while supporting multi-branch scanning.
     """
     from actions_scanner.git import SparseCloner, read_repos_file
     from actions_scanner.utils.console import (
@@ -457,7 +513,11 @@ def clone(
     repos = read_repos_file(repos_file)
     print_info(f"Found {len(repos)} repositories")
 
-    cloner = SparseCloner(concurrency=workers)
+    cloner = SparseCloner(
+        concurrency=workers,
+        shallow=not full_history,
+        single_branch=single_branch,
+    )
 
     print_info(f"Cloning to {output_dir}...")
     if is_terminal():
@@ -931,6 +991,21 @@ def report(
     help="Output format",
 )
 @click.option(
+    "--no-protected",
+    is_flag=True,
+    help="Exclude permission-gated findings",
+)
+@click.option(
+    "--no-labeled",
+    is_flag=True,
+    help="Exclude label-gated findings",
+)
+@click.option(
+    "--include-same-repo",
+    is_flag=True,
+    help="Include same-repo-only findings (excluded by default)",
+)
+@click.option(
     "--include-forks",
     is_flag=True,
     help="Include forked repositories",
@@ -945,6 +1020,18 @@ def report(
     type=int,
     default=5,
     help="Parallel clone workers",
+)
+@click.option(
+    "--full-history",
+    is_flag=True,
+    default=False,
+    help="Fetch full git history instead of shallow clone (larger .git folders)",
+)
+@click.option(
+    "--single-branch",
+    is_flag=True,
+    default=False,
+    help="Only fetch default branch (smaller .git but no multi-branch scanning)",
 )
 @click.option(
     "--skip-clone",
@@ -974,9 +1061,14 @@ def scan_org(
     output_dir: Path | None,
     output: Path | None,
     output_format: str,
+    no_protected: bool,
+    no_labeled: bool,
+    include_same_repo: bool,
     include_forks: bool,
     include_archived: bool,
     clone_workers: int,
+    full_history: bool,
+    single_branch: bool,
     skip_clone: bool,
     list_only: bool,
     all_branches: bool,
@@ -1077,7 +1169,11 @@ def scan_org(
         # Create repo URLs file content
         repo_urls = [url for _org, _repo, url in repo_info]
 
-        cloner = SparseCloner(concurrency=clone_workers)
+        cloner = SparseCloner(
+            concurrency=clone_workers,
+            shallow=not full_history,
+            single_branch=single_branch,
+        )
 
         clone_results: list[tuple[str, str]] = []
 
@@ -1189,21 +1285,32 @@ def scan_org(
     print_info(f"Scanned {combined.files_scanned} workflow files")
     print_info(f"Found {len(combined.vulnerabilities)} potential vulnerabilities")
 
-    # Filter to exploitable only
-    vulns = [v for v in combined.vulnerabilities if v.is_exploitable()]
-    print_info(f"Filtered to {len(vulns)} exploitable vulnerabilities")
+    # Filter vulnerabilities based on flags
+    vulns = combined.vulnerabilities
+    excluded_protections: list[str] = []
+    if no_protected:
+        excluded_protections.append("permission")
+    if no_labeled:
+        excluded_protections.append("label")
+    if not include_same_repo:
+        excluded_protections.append("same_repo")
+    if excluded_protections:
+        vulns = [v for v in vulns if v.protection not in excluded_protections]
+        print_info(
+            f"Filtered to {len(vulns)} vulnerabilities (excluded: {', '.join(excluded_protections)})"
+        )
 
     if output is None:
         output = _default_output_path(output_format)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Generate report
+    # Generate report (include_protected=True since filtering is done above)
     if output_format == "csv":
-        generate_csv_report(vulns, output, include_protected=False)
+        generate_csv_report(vulns, output, include_protected=True)
     elif output_format == "json":
-        generate_json_report(vulns, output, include_protected=False, scan_base_dir=output_dir)
+        generate_json_report(vulns, output, include_protected=True, scan_base_dir=output_dir)
     else:
-        generate_markdown_report(vulns, output, include_protected=False)
+        generate_markdown_report(vulns, output, include_protected=True)
 
     print_success(f"Report written to {output}")
 

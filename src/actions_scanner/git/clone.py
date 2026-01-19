@@ -67,16 +67,29 @@ class SparseCloner:
     and fetches all branches for comprehensive scanning.
     """
 
-    def __init__(self, sparse_paths: list[str] | None = None, concurrency: int = 5):
+    def __init__(
+        self,
+        sparse_paths: list[str] | None = None,
+        concurrency: int = 5,
+        shallow: bool = True,
+        single_branch: bool = False,
+    ):
         """Initialize the sparse cloner.
 
         Args:
             sparse_paths: List of paths to include in sparse checkout.
                          Defaults to [".github/"].
             concurrency: Maximum number of concurrent clone operations.
+            shallow: If True, use --depth=1 for minimal .git folder size.
+                    Defaults to True.
+            single_branch: If True, only fetch the default branch.
+                          If False, fetch all branches for multi-branch scanning.
+                          Defaults to False.
         """
         self.sparse_paths = sparse_paths or [".github/"]
         self.concurrency = concurrency
+        self.shallow = shallow
+        self.single_branch = single_branch
         self._semaphore: asyncio.Semaphore | None = None
 
     async def _run_git_command(
@@ -106,8 +119,6 @@ class SparseCloner:
     async def clone_sparse(self, repo_url: str, dest_dir: Path) -> tuple[bool, str | None]:
         """Clone repository with sparse checkout.
 
-        Fetches all branches for comprehensive vulnerability scanning.
-
         Args:
             repo_url: Repository URL to clone
             dest_dir: Destination directory path
@@ -116,17 +127,26 @@ class SparseCloner:
             Tuple of (success: bool, error_message: Optional[str])
         """
         try:
-            # Clone without checking out files, fetching all branches
+            # Build clone command with configurable options
             clone_cmd = [
                 "git",
                 "clone",
                 "--filter=blob:none",
                 "--sparse",
                 "--no-checkout",
-                "--no-single-branch",  # Fetch all branches, not just default
-                repo_url,
-                str(dest_dir),
             ]
+
+            # Add depth for shallow clones (significantly reduces .git size)
+            if self.shallow:
+                clone_cmd.append("--depth=1")
+
+            # Branch fetching strategy
+            if self.single_branch:
+                clone_cmd.append("--single-branch")
+            else:
+                clone_cmd.append("--no-single-branch")
+
+            clone_cmd.extend([repo_url, str(dest_dir)])
 
             returncode, _, stderr = await self._run_git_command(clone_cmd)
             if returncode != 0:

@@ -1,0 +1,16 @@
+name: Safe - checkouts base branch
+on:
+  pull_request_target:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Safe: checkouts the base branch, not PR code
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Build
+        run: npm run build

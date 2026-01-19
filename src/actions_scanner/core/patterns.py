@@ -6,6 +6,17 @@ DANGEROUS_REF_PATTERNS = [
     r"github\.event\.pull_request\.head\.sha",
     r"github\.event\.pull_request\.merge_commit_sha",
     r"github\.head_ref",  # Shorthand equivalent to github.event.pull_request.head.ref
+    # refs/pull/N/merge and refs/pull/N/head patterns - checkout PR code by number
+    r"refs/pull/\$\{\{.*github\.event\.pull_request\.number.*\}\}/merge",
+    r"refs/pull/\$\{\{.*github\.event\.pull_request\.number.*\}\}/head",
+    r"refs/pull/\$\{\{.*github\.event\.number.*\}\}/merge",
+    r"refs/pull/\$\{\{.*github\.event\.number.*\}\}/head",
+    # format() function patterns for refs/pull
+    r"format\s*\(\s*['\"]refs/pull/\{0\}/(merge|head)['\"]",
+    # fromJson patterns for reusable workflows that pass github context as input
+    r"refs/pull/\$\{\{.*fromJson\(inputs\.github\)\.event\.number.*\}\}/merge",
+    r"refs/pull/\$\{\{.*fromJson\(inputs\.github\)\.event\.number.*\}\}/head",
+    r"fromJson\(inputs\.github\)\.event\.pull_request\.head\.(ref|sha)",
 ]
 
 # Patterns for dangerous checkout repository values that point to PR head repos
@@ -34,6 +45,16 @@ DANGEROUS_COMMANDS = [
     r"^\s*mvn\s",
     r"^\s*gradle\s",
     r"^\s*poetry\s",
+    r"^\s*uv\s+(run|sync|pip)",
+    r"^\s*pdm\s+(run|install)",
+    r"^\s*hatch\s+run",
+    r"^\s*rye\s+run",
+    r"^\s*pixi\s+run",
+    r"^\s*pre-commit\s",
+    # Nix/devbox environments that can run arbitrary commands
+    r"^\s*devbox\s+run",
+    r"^\s*nix\s+(run|shell|develop)",
+    r"^\s*nix-shell\s",
     r"^\s*bundle\s",
     r"^\s*gem\s",
     r"^\s*rake\s",
@@ -51,6 +72,41 @@ DANGEROUS_COMMANDS = [
     r"^\s*node\s",
     r"^\s*deno\s",
     r"^\s*bun\s",
+    # Infrastructure as Code tools
+    r"^\s*terraform\s",
+    r"^\s*terramate\s",
+    r"^\s*pulumi\s",
+    r"^\s*helm\s",
+    r"^\s*kubectl\s+apply",
+    r"^\s*ansible-playbook\s",
+    r"^\s*ansible\s",
+    # Ruby/Rails
+    r"^\s*rails\s",
+    # Rust
+    r"^\s*rustc\s",
+    # Swift
+    r"^\s*swift\s+(build|run|test)",
+    # Elixir
+    r"^\s*mix\s",
+    r"^\s*elixir\s",
+    # Haskell
+    r"^\s*cabal\s",
+    r"^\s*stack\s",
+    # Scala
+    r"^\s*sbt\s",
+    # Clojure
+    r"^\s*lein\s",
+]
+
+# Patterns for dangerous git commands that checkout PR code in run steps
+# These patterns indicate checking out untrusted PR code via git commands
+DANGEROUS_GIT_CHECKOUT_PATTERNS = [
+    # git fetch origin pull/N/head followed by git checkout
+    r"git\s+fetch\s+.*pull/.*/(head|merge)",
+    # git checkout of a PR ref
+    r"git\s+checkout\s+.*pull/",
+    # gh pr checkout
+    r"gh\s+pr\s+checkout",
 ]
 
 # Patterns that indicate collaborator permission checking in scripts
@@ -95,4 +151,20 @@ AUTHORIZATION_JOB_PATTERNS = [
     "auth",
     "approval",
     "check",
+]
+
+# Patterns for actor-gating (only bot can trigger)
+# When a workflow requires the actor to be a specific bot, external attackers cannot trigger it
+ACTOR_GATING_PATTERNS = [
+    r"github\.actor\s*==\s*['\"][^'\"]+\[bot\]['\"]",  # github.actor == 'dependabot[bot]'
+    r"github\.actor\s*==\s*['\"]dependabot\[bot\]['\"]",
+    r"github\.actor\s*==\s*['\"]renovate\[bot\]['\"]",
+    r"github\.actor\s*==\s*['\"]github-actions\[bot\]['\"]",
+]
+
+# Patterns for merged-PR gating (only runs after PR is merged/reviewed)
+# When a workflow only runs on merged PRs, the maintainer has already reviewed the code
+MERGED_PR_PATTERNS = [
+    r"github\.event\.pull_request\.merged\s*==\s*true",
+    r"github\.event\.pull_request\.merged\s*!=\s*false",
 ]

@@ -1,0 +1,18 @@
+name: Label-gated workflow
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Requires maintainer to add a specific label
+    if: github.event.action == 'labeled' && contains(github.event.pull_request.labels.*.name, 'ok-to-test')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build
+        run: npm run build

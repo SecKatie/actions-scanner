@@ -1,0 +1,17 @@
+name: Vulnerable refs/pull/N/merge checkout
+on:
+  pull_request_target:
+    paths:
+      - 'src/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+      - name: Build
+        run: make build

@@ -9,10 +9,12 @@ from actions_scanner.utils.path import extract_org_repo_branch_from_path
 
 from .models import ScanResult, VulnerableJob
 from .patterns import (
+    ACTOR_GATING_PATTERNS,
     AUTHORIZATION_JOB_PATTERNS,
     DANGEROUS_COMMANDS,
     DANGEROUS_REF_PATTERNS,
     DANGEROUS_REPO_PATTERNS,
+    MERGED_PR_PATTERNS,
     PERMISSION_CHECK_PATTERNS,
     PERMISSION_OUTPUT_PATTERNS,
     SAME_REPO_PATTERNS,
@@ -99,15 +101,22 @@ class PwnRequestDetector:
         return vulnerabilities
 
     def scan_directory(self, directory: Path) -> ScanResult:
-        """Scan a directory for vulnerable workflows."""
+        """Scan a directory for vulnerable workflows.
+
+        Only scans .github/workflows at the repository root, not in subdirectories
+        (e.g., ignores templates/terraform/.github/workflows/).
+        """
         result = ScanResult()
 
-        for yaml_file in directory.rglob("*"):
+        # Only look at the root .github/workflows directory
+        workflows_dir = directory / ".github" / "workflows"
+        if not workflows_dir.is_dir():
+            return result
+
+        for yaml_file in workflows_dir.iterdir():
             if not yaml_file.is_file():
                 continue
             if yaml_file.suffix not in (".yml", ".yaml"):
-                continue
-            if ".git" in yaml_file.parts:
                 continue
             try:
                 vulns = self.analyze_workflow(yaml_file)
@@ -162,30 +171,41 @@ class PwnRequestDetector:
         """Find a dangerous checkout step in a list of steps.
 
         Returns (step_index, ref_value) or None.
+        Checks both actions/checkout refs and git commands that checkout PR code.
         """
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
 
             uses = step.get("uses", "")
-            if not uses or "actions/checkout" not in str(uses):
-                continue
+            if uses and "actions/checkout" in str(uses):
+                with_block = step.get("with", {})
+                if isinstance(with_block, dict):
+                    ref = with_block.get("ref", "")
+                    if self._is_dangerous_ref(ref):
+                        return (i, str(ref))
 
-            with_block = step.get("with", {})
-            if not isinstance(with_block, dict):
-                continue
+                    repo_value = with_block.get("repository", "")
+                    if repo_value:
+                        repo_str = str(repo_value)
+                        if any(re.search(pattern, repo_str) for pattern in DANGEROUS_REPO_PATTERNS):
+                            return (i, f"repository={repo_str}")
 
-            ref = with_block.get("ref", "")
-            if self._is_dangerous_ref(ref):
-                return (i, str(ref))
-
-            repo_value = with_block.get("repository", "")
-            if repo_value:
-                repo_str = str(repo_value)
-                if any(re.search(pattern, repo_str) for pattern in DANGEROUS_REPO_PATTERNS):
-                    return (i, f"repository={repo_str}")
+            # Check for git commands that checkout PR code in run steps
+            run = step.get("run", "")
+            if run and self._is_dangerous_git_checkout(str(run)):
+                return (i, "git checkout PR code")
 
         return None
+
+    def _is_dangerous_git_checkout(self, run_content: str) -> bool:
+        """Check if a run step contains git commands that checkout PR code."""
+        from actions_scanner.core.patterns import DANGEROUS_GIT_CHECKOUT_PATTERNS
+
+        for pattern in DANGEROUS_GIT_CHECKOUT_PATTERNS:
+            if re.search(pattern, run_content, re.IGNORECASE):
+                return True
+        return False
 
     def _find_dangerous_exec(self, steps: list, checkout_index: int) -> tuple[int, str, str] | None:
         """Find a dangerous exec step after the checkout.
@@ -379,6 +399,68 @@ class PwnRequestDetector:
 
         return False, ""
 
+    def _check_job_actor_gating(self, job: dict, workflow: dict) -> tuple[bool, str]:
+        """Check if a job only runs for specific bot actors.
+
+        When a workflow requires the actor to be a specific bot (like dependabot[bot]),
+        external attackers cannot trigger it since they can't impersonate bots.
+
+        Returns (is_actor_gated, description).
+        """
+        jobs = workflow.get("jobs", {})
+
+        # Check this job's if condition
+        if_condition = str(job.get("if", ""))
+        for pattern in ACTOR_GATING_PATTERNS:
+            if re.search(pattern, if_condition, re.IGNORECASE):
+                return True, f"Job only runs for bot actor: {if_condition[:80]}"
+
+        # Check dependency jobs' if conditions
+        needs = job.get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+
+        for need in needs:
+            dep_job = jobs.get(need, {})
+            if isinstance(dep_job, dict):
+                dep_if = str(dep_job.get("if", ""))
+                for pattern in ACTOR_GATING_PATTERNS:
+                    if re.search(pattern, dep_if, re.IGNORECASE):
+                        return True, f"Dependency '{need}' only runs for bot actor"
+
+        return False, ""
+
+    def _check_job_merged_pr_gating(self, job: dict, workflow: dict) -> tuple[bool, str]:
+        """Check if a job only runs after a PR is merged.
+
+        When a workflow only runs on merged PRs, the maintainer has already
+        reviewed and approved the code, so it's not exploitable.
+
+        Returns (is_merged_gated, description).
+        """
+        jobs = workflow.get("jobs", {})
+
+        # Check this job's if condition
+        if_condition = str(job.get("if", ""))
+        for pattern in MERGED_PR_PATTERNS:
+            if re.search(pattern, if_condition, re.IGNORECASE):
+                return True, f"Job only runs on merged PRs: {if_condition[:80]}"
+
+        # Check dependency jobs' if conditions
+        needs = job.get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+
+        for need in needs:
+            dep_job = jobs.get(need, {})
+            if isinstance(dep_job, dict):
+                dep_if = str(dep_job.get("if", ""))
+                for pattern in MERGED_PR_PATTERNS:
+                    if re.search(pattern, dep_if, re.IGNORECASE):
+                        return True, f"Dependency '{need}' only runs on merged PRs"
+
+        return False, ""
+
     def _analyze_protection(self, workflow: dict, job_name: str) -> tuple[str, str]:
         """Determine what protection (if any) a vulnerable job has.
 
@@ -389,6 +471,8 @@ class PwnRequestDetector:
         - "label": Requires maintainer to add label (social engineering vector)
         - "permission": Requires PR author to have write/admin/maintain access (not exploitable)
         - "same_repo": Only runs for PRs from same repo, not forks (not exploitable by external)
+        - "actor": Only runs for specific bot actors (not exploitable by external)
+        - "merged": Only runs on merged PRs (code already reviewed)
         """
         jobs = workflow.get("jobs", {})
         job = jobs.get(job_name, {})
@@ -397,6 +481,16 @@ class PwnRequestDetector:
         is_perm_gated, perm_reason = self._check_job_permission_gating(job, workflow)
         if is_perm_gated:
             return "permission", perm_reason
+
+        # Check for actor gating (only bot can trigger - not exploitable)
+        is_actor_gated, actor_reason = self._check_job_actor_gating(job, workflow)
+        if is_actor_gated:
+            return "actor", actor_reason
+
+        # Check for merged PR gating (only runs after merge - already reviewed)
+        is_merged_gated, merged_reason = self._check_job_merged_pr_gating(job, workflow)
+        if is_merged_gated:
+            return "merged", merged_reason
 
         # Check for both same-repo and label gating
         is_same_repo, same_repo_reason = self._check_job_same_repo_gating(job, workflow)

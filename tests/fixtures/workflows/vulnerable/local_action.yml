@@ -1,0 +1,16 @@
+name: Vulnerable local action
+on:
+  pull_request_target:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Vulnerable: runs a local action from checked out PR code
+      - name: Run local action
+        uses: ./actions/my-action

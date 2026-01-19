@@ -1,0 +1,17 @@
+name: Same-repo gated workflow
+on:
+  pull_request_target:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Only runs for PRs from the same repo (not forks)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Build
+        run: npm run build

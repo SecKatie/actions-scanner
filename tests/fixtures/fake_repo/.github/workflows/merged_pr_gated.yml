@@ -1,0 +1,19 @@
+name: Merged PR workflow
+on:
+  pull_request_target:
+    branches: ['main']
+    types: ['closed']
+
+jobs:
+  post-merge:
+    # Only runs after PR is merged - code already reviewed by maintainer
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Post-merge tasks
+        run: npm run post-merge
