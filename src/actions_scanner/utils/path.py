@@ -180,6 +180,22 @@ def resolve_repo_dir(
                 base_dir / org / repo,
             ]
         )
+        # Also look for branch/code subdirs created by SparseCloner
+        # SparseCloner creates: base_dir / org / repo / branch_encoded / code
+        org_repo_base = base_dir / org / repo
+        if org_repo_base.exists():
+            # Check for common default branches
+            for branch_name in ("main", "master", "develop", "dev"):
+                encoded = encode_branch(branch_name)
+                code_dir = org_repo_base / encoded / "code"
+                if code_dir.exists():
+                    return code_dir, True
+            # Check any subdirectory that might be a branch/code dir
+            for child in org_repo_base.iterdir():
+                if child.is_dir():
+                    code_subdir = child / "code"
+                    if code_subdir.exists() and (code_subdir / ".github").exists():
+                        return code_subdir, True
     if repo:
         candidates.append(base_dir / repo)
 

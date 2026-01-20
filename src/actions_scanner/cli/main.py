@@ -968,7 +968,13 @@ def report(
 
 
 @cli.command("scan-org")
-@click.argument("org", type=str)
+@click.argument("org", type=str, required=False)
+@click.option(
+    "--org-file",
+    type=click.Path(path_type=Path, exists=True),
+    default=None,
+    help="File containing newline-separated list of organizations to scan",
+)
 @click.option(
     "--output-dir",
     "-d",
@@ -1057,7 +1063,8 @@ def report(
 @click.pass_context
 def scan_org(
     ctx: click.Context,
-    org: str,
+    org: str | None,
+    org_file: Path | None,
     output_dir: Path | None,
     output: Path | None,
     output_format: str,
@@ -1083,11 +1090,15 @@ def scan_org(
 
     Use --all-branches to scan multiple branches per repo using smart sampling.
 
+    Either ORG or --org-file must be provided.
+
     Examples:
 
         actions-scanner scan-org ansible
 
         actions-scanner scan-org redhat --include-forks -d repos/redhat
+
+        actions-scanner scan-org --org-file orgs.txt
 
         actions-scanner scan-org myorg --list-only
 
@@ -1116,6 +1127,20 @@ def scan_org(
 
     settings: Settings = ctx.obj["settings"]
 
+    # Validate and parse organizations
+    orgs: list[str] = []
+    if org_file:
+        orgs = [line.strip() for line in org_file.read_text().splitlines() if line.strip()]
+        if not orgs:
+            print_error(f"No organizations found in {org_file}")
+            raise SystemExit(1)
+        print_info(f"Found {len(orgs)} organizations in {org_file}")
+    elif org:
+        orgs = [org]
+    else:
+        print_error("Either ORG or --org-file must be provided")
+        raise SystemExit(1)
+
     # Check for GitHub token
     token = settings.github.token
     if not token:
@@ -1126,22 +1151,28 @@ def scan_org(
         print_error("GITHUB_TOKEN environment variable is required")
         raise SystemExit(1)
 
-    print_info(f"Discovering repositories in '{org}'...")
+    if len(orgs) == 1:
+        print_info(f"Discovering repositories in '{orgs[0]}'...")
+    else:
+        print_info(f"Discovering repositories across {len(orgs)} organizations...")
 
     if output_dir is None:
         output_dir = Path(tempfile.mkdtemp(prefix="actions-scanner-"))
         print_info(f"Using temporary directory {output_dir}")
 
     async def discover_repos() -> list[tuple[str, str]]:
-        """Discover all repos in the org."""
+        """Discover all repos in the orgs."""
         async with GitHubClient(token=token, concurrency=settings.github.concurrency) as client:
             scanner = OrgScanner(client)
-            repos = await scanner.list_org_repos(
-                org,
-                include_archived=include_archived,
-                include_forks=include_forks,
-            )
-            return [(r.full_name, r.html_url) for r in repos]
+            all_repos: list[tuple[str, str]] = []
+            for org_name in orgs:
+                repos = await scanner.list_org_repos(
+                    org_name,
+                    include_archived=include_archived,
+                    include_forks=include_forks,
+                )
+                all_repos.extend((r.full_name, r.html_url) for r in repos)
+            return all_repos
 
     repos = asyncio.run(discover_repos())
     print_info(f"Found {len(repos)} repositories")
@@ -1318,7 +1349,10 @@ def scan_org(
     counts = combined.counts_by_protection
     console.print()
     console.print("[bold]Summary:[/bold]")
-    console.print(f"  Organization:           {org}")
+    orgs_display = (
+        ", ".join(orgs) if len(orgs) <= 3 else f"{', '.join(orgs[:3])}, ... ({len(orgs)} total)"
+    )
+    console.print(f"  Organization(s):        {orgs_display}")
     console.print(f"  Repositories scanned:   {len(repo_dirs)}")
     if missing_repos:
         console.print(f"  Repositories missing:   {len(missing_repos)}")
