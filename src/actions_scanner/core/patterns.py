@@ -168,3 +168,19 @@ MERGED_PR_PATTERNS = [
     r"github\.event\.pull_request\.merged\s*==\s*true",
     r"github\.event\.pull_request\.merged\s*!=\s*false",
 ]
+
+# Patterns for workflow_run events that checkout PR code
+# workflow_run can be triggered by PRs and runs with base repo privileges
+WORKFLOW_RUN_DANGEROUS_REF_PATTERNS = [
+    r"github\.event\.workflow_run\.head_commit\.id",
+    r"github\.event\.workflow_run\.head_sha",
+    r"github\.event\.workflow_run\.head_branch",
+    r"github\.event\.workflow_run\.pull_requests\[.*\]\.head\.(ref|sha)",
+]
+
+# Git checkout patterns specific to workflow_run
+# These indicate checking out the triggering workflow's commit
+WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS = [
+    r"git\s+checkout\s+.*github\.event\.workflow_run\.head_commit",
+    r"git\s+checkout\s+.*github\.event\.workflow_run\.head_sha",
+]

@@ -1,0 +1,13 @@
+name: Safe workflow_run
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Deploy
+        run: make deploy

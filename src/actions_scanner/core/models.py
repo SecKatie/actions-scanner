@@ -16,6 +16,13 @@ class ProtectionLevel(str, Enum):
     MERGED = "merged"  # Only runs on merged PRs (code already reviewed)
 
 
+class VulnerabilityType(str, Enum):
+    """Type of workflow vulnerability."""
+
+    PWNREQUEST = "pwnrequest"  # pull_request_target trigger
+    WORKFLOW_RUN = "workflow_run"  # workflow_run trigger
+
+
 class ExecType(str, Enum):
     """Type of dangerous execution after checkout."""
 
@@ -38,6 +45,7 @@ class VulnerableJob:
     branch: str = ""  # Populated by scanner when scanning worktrees
     protection: str = "none"  # none, label, permission, same_repo
     protection_detail: str = ""  # Description of the protection
+    vulnerability_type: str = VulnerabilityType.PWNREQUEST.value  # pwnrequest or workflow_run
 
     def is_exploitable(self) -> bool:
         """Return True if this vulnerability can be exploited by external attackers."""
@@ -46,6 +54,7 @@ class VulnerableJob:
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         return {
+            "vulnerability_type": self.vulnerability_type,
             "workflow_path": str(self.workflow_path),
             "job_name": self.job_name,
             "checkout_line": self.checkout_line,

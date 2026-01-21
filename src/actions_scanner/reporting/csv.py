@@ -64,6 +64,7 @@ def generate_csv_report(
         writer = csv.writer(f)
         writer.writerow(
             [
+                "vulnerability_type",
                 "org",
                 "repo",
                 "branch",
@@ -83,6 +84,7 @@ def generate_csv_report(
             org, repo = extract_org_repo_from_path(str(v.workflow_path))
 
             row = [
+                v.vulnerability_type,
                 org,
                 repo,
                 v.branch,
@@ -119,6 +121,7 @@ def generate_vulnerabilities_csv(
     extra_columns = extra_columns or {}
 
     base_columns = [
+        "vulnerability_type",
         "org",
         "repo",
         "branch",
@@ -144,6 +147,7 @@ def generate_vulnerabilities_csv(
             org, repo = extract_org_repo_from_path(str(v.workflow_path))
 
             row = {
+                "vulnerability_type": v.vulnerability_type,
                 "org": org,
                 "repo": repo,
                 "branch": v.branch,

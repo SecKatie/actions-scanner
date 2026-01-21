@@ -7,7 +7,7 @@ import yaml
 
 from actions_scanner.utils.path import extract_org_repo_branch_from_path
 
-from .models import ScanResult, VulnerableJob
+from .models import ScanResult, VulnerabilityType, VulnerableJob
 from .patterns import (
     ACTOR_GATING_PATTERNS,
     AUTHORIZATION_JOB_PATTERNS,
@@ -18,6 +18,8 @@ from .patterns import (
     PERMISSION_CHECK_PATTERNS,
     PERMISSION_OUTPUT_PATTERNS,
     SAME_REPO_PATTERNS,
+    WORKFLOW_RUN_DANGEROUS_REF_PATTERNS,
+    WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS,
     WRITE_ACCESS_PATTERNS,
 )
 
@@ -572,6 +574,251 @@ class PwnRequestDetector:
         return 0  # Fallback
 
 
+class WorkflowRunDetector:
+    """Detects workflow_run vulnerabilities in GitHub Actions workflows.
+
+    A workflow_run vulnerability requires three conditions in the same job:
+    1. workflow_run trigger
+    2. Checkout of PR code from the triggering workflow
+    3. Execution of code from the checkout (npm, make, local actions, etc.)
+
+    This is similar to PwnRequest but uses a different trigger mechanism.
+    """
+
+    def analyze_workflow(self, workflow_path: Path) -> list[VulnerableJob]:
+        """Analyze a workflow file for workflow_run vulnerabilities."""
+        vulnerabilities = []
+
+        try:
+            content = workflow_path.read_text()
+            workflow = yaml.safe_load(content)
+        except Exception:
+            return []
+
+        if not isinstance(workflow, dict):
+            return []
+
+        # Check for workflow_run trigger
+        if not self._has_workflow_run_trigger(workflow):
+            return []
+
+        jobs = workflow.get("jobs", {})
+        if not isinstance(jobs, dict):
+            return []
+
+        for job_name, job_config in jobs.items():
+            if not isinstance(job_config, dict):
+                continue
+
+            steps = job_config.get("steps", [])
+            if not isinstance(steps, list):
+                continue
+
+            # Find dangerous checkout in this job
+            checkout_result = self._find_dangerous_checkout(steps)
+            if not checkout_result:
+                continue
+
+            checkout_index, checkout_ref = checkout_result
+
+            # Find dangerous exec after the checkout in this job
+            exec_result = self._find_dangerous_exec(steps, checkout_index)
+            if not exec_result:
+                continue
+
+            exec_index, exec_type, exec_value = exec_result
+
+            # Found a vulnerability
+            checkout_line = self._get_line_number(content, job_name, checkout_index)
+            exec_line = self._get_line_number(content, job_name, exec_index)
+            _org, _repo, branch = extract_org_repo_branch_from_path(str(workflow_path))
+
+            # Reuse protection analysis from PwnRequest (same logic applies)
+            protection, protection_detail = self._analyze_protection(workflow, job_name)
+
+            vulnerabilities.append(
+                VulnerableJob(
+                    workflow_path=workflow_path,
+                    job_name=job_name,
+                    checkout_line=checkout_line,
+                    checkout_ref=checkout_ref,
+                    exec_line=exec_line,
+                    exec_type=exec_type,
+                    exec_value=exec_value,
+                    has_authorization=False,
+                    branch=branch,
+                    protection=protection,
+                    protection_detail=protection_detail,
+                    vulnerability_type=VulnerabilityType.WORKFLOW_RUN.value,
+                )
+            )
+
+        return vulnerabilities
+
+    def scan_directory(self, directory: Path) -> ScanResult:
+        """Scan a directory for workflow_run vulnerabilities."""
+        result = ScanResult()
+
+        workflows_dir = directory / ".github" / "workflows"
+        if not workflows_dir.is_dir():
+            return result
+
+        for yaml_file in workflows_dir.iterdir():
+            if not yaml_file.is_file():
+                continue
+            if yaml_file.suffix not in (".yml", ".yaml"):
+                continue
+            try:
+                vulns = self.analyze_workflow(yaml_file)
+                result.vulnerabilities.extend(vulns)
+                result.files_scanned += 1
+            except Exception as e:
+                result.errors.append(f"{yaml_file}: {e}")
+
+        return result
+
+    def _has_workflow_run_trigger(self, workflow: dict) -> bool:
+        """Check if workflow has workflow_run trigger."""
+        on_section = workflow.get("on") or workflow.get(True)
+        if on_section is None:
+            return False
+
+        if isinstance(on_section, (dict, list)):
+            return "workflow_run" in on_section
+        if isinstance(on_section, str):
+            return on_section == "workflow_run"
+
+        return False
+
+    def _is_dangerous_workflow_run_ref(self, ref_value: str) -> bool:
+        """Check if a ref value contains dangerous workflow_run references."""
+        if not ref_value:
+            return False
+        ref_str = str(ref_value)
+        return any(re.search(pattern, ref_str) for pattern in WORKFLOW_RUN_DANGEROUS_REF_PATTERNS)
+
+    def _is_dangerous_command(self, cmd: str) -> bool:
+        """Check if a command is a dangerous build command."""
+        if not cmd:
+            return False
+        cmd_str = str(cmd).strip()
+        lines = cmd_str.split("\n")
+        for line in lines:
+            line = line.strip()
+            if any(re.search(pattern, line, re.IGNORECASE) for pattern in DANGEROUS_COMMANDS):
+                return True
+        return False
+
+    def _is_local_action(self, uses_value: str) -> bool:
+        """Check if a uses value is a local action (starts with ./)."""
+        if not uses_value:
+            return False
+        return str(uses_value).strip().startswith("./")
+
+    def _find_dangerous_checkout(self, steps: list) -> tuple[int, str] | None:
+        """Find a dangerous checkout step in a list of steps.
+
+        Returns (step_index, ref_value) or None.
+        Checks both actions/checkout refs and git commands that checkout workflow_run code.
+        """
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+
+            uses = step.get("uses", "")
+            if uses and "actions/checkout" in str(uses):
+                with_block = step.get("with", {})
+                if isinstance(with_block, dict):
+                    ref = with_block.get("ref", "")
+                    if self._is_dangerous_workflow_run_ref(ref):
+                        return (i, str(ref))
+
+            # Check for git commands that checkout workflow_run code in run steps
+            run = step.get("run", "")
+            if run and self._is_dangerous_workflow_run_git_checkout(str(run)):
+                return (i, "git checkout workflow_run code")
+
+        return None
+
+    def _is_dangerous_workflow_run_git_checkout(self, run_content: str) -> bool:
+        """Check if a run step contains git commands that checkout workflow_run code."""
+        for pattern in WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS:
+            if re.search(pattern, run_content, re.IGNORECASE):
+                return True
+        return False
+
+    def _find_dangerous_exec(self, steps: list, checkout_index: int) -> tuple[int, str, str] | None:
+        """Find a dangerous exec step after the checkout.
+
+        Returns (step_index, exec_type, exec_value) or None.
+        """
+        for i, step in enumerate(steps):
+            if i <= checkout_index:
+                continue
+
+            if not isinstance(step, dict):
+                continue
+
+            uses = step.get("uses", "")
+            if self._is_local_action(uses):
+                return (i, "local_action", str(uses))
+
+            run = step.get("run", "")
+            if self._is_dangerous_command(run):
+                cmd_str = str(run).strip()
+                first_line = cmd_str.split("\n")[0].strip()[:50]
+                return (i, "build_command", first_line)
+
+        return None
+
+    def _analyze_protection(self, workflow: dict, job_name: str) -> tuple[str, str]:
+        """Determine what protection (if any) a vulnerable job has.
+
+        Uses the same logic as PwnRequestDetector since protections work the same way.
+        """
+        # Create a PwnRequestDetector to reuse its protection analysis
+        pwn_detector = PwnRequestDetector()
+        return pwn_detector._analyze_protection(workflow, job_name)
+
+    def _get_line_number(self, workflow_content: str, job_name: str, step_index: int) -> int:
+        """Estimate line number for a step in a job."""
+        lines = workflow_content.split("\n")
+        in_job = False
+        in_steps = False
+        step_count = -1
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+
+            if re.match(rf"^\s*{re.escape(job_name)}:\s*$", line) or re.match(
+                rf"^\s*{re.escape(job_name)}:\s*#", line
+            ):
+                in_job = True
+                continue
+
+            if in_job:
+                if (
+                    re.match(r"^\s{2}[a-zA-Z_-]+:\s*$", line)
+                    and not stripped.startswith("-")
+                    and "steps:" not in stripped
+                    and ":" in stripped
+                ):
+                    indent = len(line) - len(line.lstrip())
+                    if indent <= 2:
+                        break
+
+                if "steps:" in stripped:
+                    in_steps = True
+                    continue
+
+                if in_steps and re.match(r"^\s*-\s+", line):
+                    step_count += 1
+                    if step_count == step_index:
+                        return i
+
+        return 0
+
+
 # Convenience functions for standalone usage
 def analyze_workflow(workflow_path: Path) -> list[VulnerableJob]:
     """Analyze a workflow file for PwnRequest vulnerabilities."""
@@ -579,7 +826,39 @@ def analyze_workflow(workflow_path: Path) -> list[VulnerableJob]:
     return detector.analyze_workflow(workflow_path)
 
 
+def analyze_workflow_all(workflow_path: Path) -> list[VulnerableJob]:
+    """Analyze a workflow file for all vulnerability types."""
+    results = []
+    pwn_detector = PwnRequestDetector()
+    workflow_run_detector = WorkflowRunDetector()
+    results.extend(pwn_detector.analyze_workflow(workflow_path))
+    results.extend(workflow_run_detector.analyze_workflow(workflow_path))
+    return results
+
+
 def scan_directory(directory: Path) -> ScanResult:
-    """Scan a directory for vulnerable workflows."""
-    detector = PwnRequestDetector()
-    return detector.scan_directory(directory)
+    """Scan a directory for all vulnerable workflows."""
+    pwn_detector = PwnRequestDetector()
+    workflow_run_detector = WorkflowRunDetector()
+    result = ScanResult()
+
+    workflows_dir = directory / ".github" / "workflows"
+    if not workflows_dir.is_dir():
+        return result
+
+    for yaml_file in workflows_dir.iterdir():
+        if not yaml_file.is_file():
+            continue
+        if yaml_file.suffix not in (".yml", ".yaml"):
+            continue
+        try:
+            # Run both detectors
+            pwn_vulns = pwn_detector.analyze_workflow(yaml_file)
+            workflow_run_vulns = workflow_run_detector.analyze_workflow(yaml_file)
+            result.vulnerabilities.extend(pwn_vulns)
+            result.vulnerabilities.extend(workflow_run_vulns)
+            result.files_scanned += 1
+        except Exception as e:
+            result.errors.append(f"{yaml_file}: {e}")
+
+    return result

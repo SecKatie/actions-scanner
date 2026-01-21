@@ -1,11 +1,11 @@
-"""Tests for the PwnRequest vulnerability detector."""
+"""Tests for the PwnRequest and WorkflowRun vulnerability detectors."""
 
 from pathlib import Path
 
 import pytest
 
-from actions_scanner.core import PwnRequestDetector, VulnerableJob
-from actions_scanner.core.models import ProtectionLevel
+from actions_scanner.core import PwnRequestDetector, VulnerableJob, WorkflowRunDetector
+from actions_scanner.core.models import ProtectionLevel, VulnerabilityType
 
 
 class TestPwnRequestDetector:
@@ -294,3 +294,61 @@ class TestVulnerableJob:
         assert d["workflow_path"] == "test.yml"
         assert d["job_name"] == "test"
         assert d["branch"] == "main"
+        assert d["vulnerability_type"] == VulnerabilityType.PWNREQUEST.value
+
+
+class TestWorkflowRunDetector:
+    """Tests for WorkflowRunDetector class."""
+
+    @pytest.fixture
+    def detector(self) -> WorkflowRunDetector:
+        """Create a detector instance."""
+        return WorkflowRunDetector()
+
+    def test_detect_workflow_run_vulnerability(
+        self, detector: WorkflowRunDetector, workflow_run_vulnerability_path: Path
+    ) -> None:
+        """Test detection of a workflow_run vulnerability."""
+        vulns = detector.analyze_workflow(workflow_run_vulnerability_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.job_name == "build"
+        assert "git checkout workflow_run code" in vuln.checkout_ref
+        assert vuln.exec_type == "build_command"
+        assert vuln.protection == "none"
+        assert vuln.vulnerability_type == VulnerabilityType.WORKFLOW_RUN.value
+        assert vuln.is_exploitable()
+
+    def test_safe_workflow_run_default_checkout(
+        self, detector: WorkflowRunDetector, workflow_run_safe_path: Path
+    ) -> None:
+        """Test that workflow_run with default checkout is not flagged."""
+        vulns = detector.analyze_workflow(workflow_run_safe_path)
+
+        # No dangerous checkout of workflow_run code
+        assert len(vulns) == 0
+
+    def test_workflow_run_not_triggered_by_pull_request_target(
+        self, detector: WorkflowRunDetector, vulnerable_workflow_path: Path
+    ) -> None:
+        """Test that pull_request_target workflows are not flagged by WorkflowRunDetector."""
+        vulns = detector.analyze_workflow(vulnerable_workflow_path)
+
+        # WorkflowRunDetector should not detect pull_request_target workflows
+        assert len(vulns) == 0
+
+    def test_vulnerability_type_field(self) -> None:
+        """Test that WorkflowRunDetector sets the correct vulnerability type."""
+        vuln = VulnerableJob(
+            workflow_path=Path("test.yml"),
+            job_name="test",
+            checkout_line=10,
+            checkout_ref="git checkout workflow_run code",
+            exec_line=15,
+            exec_type="build_command",
+            exec_value="make build",
+            vulnerability_type=VulnerabilityType.WORKFLOW_RUN.value,
+        )
+        assert vuln.vulnerability_type == "workflow_run"
+        assert vuln.to_dict()["vulnerability_type"] == "workflow_run"

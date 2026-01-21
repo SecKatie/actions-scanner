@@ -107,6 +107,18 @@ def fake_repo_dir() -> Path:
 
 
 @pytest.fixture
+def workflow_run_vulnerability_path(workflows_dir: Path) -> Path:
+    """Return path to a vulnerable workflow_run workflow."""
+    return workflows_dir / "vulnerable" / "workflow_run.yml"
+
+
+@pytest.fixture
+def workflow_run_safe_path(workflows_dir: Path) -> Path:
+    """Return path to a safe workflow_run workflow."""
+    return workflows_dir / "safe" / "workflow_run_safe.yml"
+
+
+@pytest.fixture
 def temp_repo(tmp_path: Path) -> Path:
     """Create a temporary repository structure."""
     github_dir = tmp_path / ".github" / "workflows"
