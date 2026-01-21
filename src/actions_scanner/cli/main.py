@@ -243,7 +243,14 @@ def scan(
         generate_json_report,
         generate_markdown_report,
     )
-    from actions_scanner.utils.console import print_error, print_info, print_success, print_warning
+    from actions_scanner.utils.console import (
+        create_progress,
+        is_terminal,
+        print_error,
+        print_info,
+        print_success,
+        print_warning,
+    )
     from actions_scanner.utils.path import (
         extract_org_repo_from_path,
     )
@@ -307,7 +314,19 @@ def scan(
             shallow=not full_history,
             single_branch=single_branch,
         )
-        asyncio.run(cloner.clone_repos(repo_urls, scan_base_dir))
+        if is_terminal():
+            progress = create_progress()
+            task_id = progress.add_task("Cloning", total=len(repo_urls))
+
+            def on_progress(completed: int, total: int, name: str, result) -> None:
+                # Fixed-width name keeps the progress bar stable
+                display_name = name[:40].ljust(40)
+                progress.update(task_id, completed=completed, description=f"Cloning {display_name}")
+
+            with progress:
+                asyncio.run(cloner.clone_repos(repo_urls, scan_base_dir, on_progress=on_progress))
+        else:
+            asyncio.run(cloner.clone_repos(repo_urls, scan_base_dir))
         print_info("Clone complete (temporary directory retained for analysis)")
 
     result = ScanResult()
