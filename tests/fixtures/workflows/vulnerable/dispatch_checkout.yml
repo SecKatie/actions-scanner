@@ -1,0 +1,65 @@
+# Vulnerable workflow: Confused deputy via issue_comment
+# Pattern based on containers/kubernetes-mcp-server gevals.yaml
+#
+# This workflow is vulnerable because:
+# 1. Triggered by issue_comment (anyone who can comment)
+# 2. Permission check validates the COMMENTER, not the PR author
+# 3. Checks out code from the PR (attacker's code)
+# 4. Executes build commands on that code
+#
+# Attack scenario:
+# 1. Attacker creates malicious PR with poisoned Makefile
+# 2. Maintainer comments "/run-tests" to test the PR
+# 3. Maintainer's permission passes the check
+# 4. Attacker's malicious code executes with secrets access
+
+name: Test Runner
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-trigger:
+    name: Check if test should run
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/run-tests')
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+      pr-ref: ${{ steps.check.outputs.pr-ref }}
+    steps:
+      - name: Check permissions
+        id: check
+        run: |
+          PERMISSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/collaborators/${{ github.event.comment.user.login }}/permission" \
+            | jq -r '.permission')
+          if [[ "$PERMISSION" == "admin" || "$PERMISSION" == "write" ]]; then
+            echo "should-run=true" >> $GITHUB_OUTPUT
+            echo "pr-ref=refs/pull/${{ github.event.issue.number }}/head" >> $GITHUB_OUTPUT
+          else
+            echo "should-run=false" >> $GITHUB_OUTPUT
+          fi
+
+  run-tests:
+    name: Run Tests
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-trigger.outputs.pr-ref }}
+
+      - name: Run tests
+        run: make test
+        env:
+          API_KEY: ${{ secrets.API_KEY }}

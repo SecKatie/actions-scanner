@@ -1,0 +1,34 @@
+# Safe workflow: issue_comment that doesn't checkout PR code
+#
+# This workflow is SAFE because:
+# 1. Although triggered by issue_comment
+# 2. It only checks out the base branch (default ref)
+# 3. Never executes untrusted PR code
+
+name: Comment Bot
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  respond:
+    name: Respond to comment
+    runs-on: ubuntu-latest
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/help')
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        # No ref specified - checks out base branch (safe)
+
+      - name: Post help message
+        run: |
+          gh pr comment ${{ github.event.issue.number }} --body "Here's some help..."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

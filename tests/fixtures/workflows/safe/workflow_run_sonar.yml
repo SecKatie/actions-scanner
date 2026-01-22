@@ -1,0 +1,63 @@
+name: SonarCloud
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+jobs:
+  sonar:
+    name: Upload to SonarCloud
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: coverage
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Extract PR number from coverage.xml
+        run: |
+          echo "PR_NUMBER=$(grep -m 1 '<!-- PR' coverage.xml | awk '{print $3}')" >> $GITHUB_ENV
+
+      - name: Get PR info
+        uses: octokit/request-action@v2.x
+        id: pr_info
+        with:
+          route: GET /repos/{repo}/pulls/{number}
+          repo: ${{ github.event.repository.full_name }}
+          number: ${{ env.PR_NUMBER }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set PR info into env
+        run: |
+          echo "PR_BASE=${{ fromJson(steps.pr_info.outputs.data).base.ref }}" >> $GITHUB_ENV
+          echo "PR_HEAD=${{ fromJson(steps.pr_info.outputs.data).head.ref }}" >> $GITHUB_ENV
+
+      - name: Checkout PR for analysis
+        run: |
+          gh pr checkout ${{ env.PR_NUMBER }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract and export repo owner/name
+        run: |
+          REPO_SLUG="${GITHUB_REPOSITORY}"
+          IFS="/" read -r REPO_OWNER REPO_NAME <<< "$REPO_SLUG"
+          echo "REPO_OWNER=$REPO_OWNER" >> $GITHUB_ENV
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ env.REPO_OWNER }}_${{ env.REPO_NAME }}
+            -Dsonar.organization=${{ env.REPO_OWNER }}

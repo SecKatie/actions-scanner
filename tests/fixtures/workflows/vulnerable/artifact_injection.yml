@@ -1,0 +1,35 @@
+name: Sonar Analysis
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types:
+      - completed
+jobs:
+  build:
+    name: Analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{github.event.workflow_run.head_sha}}
+      - name: Download PrInfo
+        uses: actions/download-artifact@v4
+        with:
+          pattern: prInfo
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{github.event.workflow_run.id}}
+      - name: Run analysis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir build
+          if [ '${{github.event.workflow_run.event}}' == 'pull_request' ]; then
+            PR_NUMBER=$(<prInfo/PR)
+            BASE_REF=$(<prInfo/base_ref)
+            HEAD_REF=$(<prInfo/head_ref)
+            ./analyze.sh -base=$BASE_REF -head=$HEAD_REF -pr=$PR_NUMBER
+          else
+            ./analyze.sh
+          fi
+        shell: bash
