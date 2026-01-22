@@ -289,18 +289,58 @@ def scan(
             print_error("GITHUB_TOKEN environment variable is required to scan orgs")
             raise SystemExit(1)
 
-        async def discover_org_repos() -> list[str]:
-            async with GitHubClient(token=token, concurrency=settings.github.concurrency) as client:
-                scanner = OrgScanner(client)
-                results = []
-                for org in orgs:
-                    repos = await scanner.list_org_repos(
-                        org, include_archived=False, include_forks=False
-                    )
-                    results.extend([r.html_url for r in repos])
-                return results
+        if is_terminal():
+            progress = create_progress()
+            task_id = progress.add_task("Discovering", total=len(orgs))
+            repos_found = 0
 
-        org_repo_urls = asyncio.run(discover_org_repos())
+            async def discover_org_repos() -> list[str]:
+                nonlocal repos_found
+                async with GitHubClient(
+                    token=token, concurrency=settings.github.concurrency
+                ) as client:
+                    scanner = OrgScanner(client)
+                    results = []
+                    for i, org in enumerate(orgs):
+
+                        def on_page_progress(page: int, count: int, org: str = org) -> None:
+                            nonlocal repos_found
+                            repos_found = len(results) + count
+                            org_display = org[:30].ljust(30)
+                            progress.update(
+                                task_id,
+                                description=f"Discovering {org_display} ({repos_found} repos)",
+                            )
+
+                        repos = await scanner.list_org_repos(
+                            org,
+                            include_archived=False,
+                            include_forks=False,
+                            on_progress=on_page_progress,
+                        )
+                        results.extend([r.html_url for r in repos])
+                        repos_found = len(results)
+                        progress.update(task_id, completed=i + 1)
+                    return results
+
+            with progress:
+                org_repo_urls = asyncio.run(discover_org_repos())
+        else:
+
+            async def discover_org_repos() -> list[str]:
+                async with GitHubClient(
+                    token=token, concurrency=settings.github.concurrency
+                ) as client:
+                    scanner = OrgScanner(client)
+                    results = []
+                    for org in orgs:
+                        repos = await scanner.list_org_repos(
+                            org, include_archived=False, include_forks=False
+                        )
+                        results.extend([r.html_url for r in repos])
+                    return results
+
+            org_repo_urls = asyncio.run(discover_org_repos())
         repo_urls.extend(org_repo_urls)
 
     repo_urls = sorted(set(repo_urls))
@@ -1136,6 +1176,7 @@ def scan_org(
         generate_markdown_report,
     )
     from actions_scanner.utils.console import (
+        create_progress,
         is_terminal,
         print_error,
         print_info,
@@ -1170,30 +1211,64 @@ def scan_org(
         print_error("GITHUB_TOKEN environment variable is required")
         raise SystemExit(1)
 
-    if len(orgs) == 1:
-        print_info(f"Discovering repositories in '{orgs[0]}'...")
-    else:
-        print_info(f"Discovering repositories across {len(orgs)} organizations...")
-
     if output_dir is None:
         output_dir = Path(tempfile.mkdtemp(prefix="actions-scanner-"))
         print_info(f"Using temporary directory {output_dir}")
 
-    async def discover_repos() -> list[tuple[str, str]]:
-        """Discover all repos in the orgs."""
-        async with GitHubClient(token=token, concurrency=settings.github.concurrency) as client:
-            scanner = OrgScanner(client)
-            all_repos: list[tuple[str, str]] = []
-            for org_name in orgs:
-                repos = await scanner.list_org_repos(
-                    org_name,
-                    include_archived=include_archived,
-                    include_forks=include_forks,
-                )
-                all_repos.extend((r.full_name, r.html_url) for r in repos)
-            return all_repos
+    if is_terminal():
+        progress = create_progress()
+        task_id = progress.add_task("Discovering", total=len(orgs))
+        repos_found = 0
 
-    repos = asyncio.run(discover_repos())
+        async def discover_repos() -> list[tuple[str, str]]:
+            nonlocal repos_found
+            async with GitHubClient(token=token, concurrency=settings.github.concurrency) as client:
+                scanner = OrgScanner(client)
+                all_repos: list[tuple[str, str]] = []
+                for i, org_name in enumerate(orgs):
+
+                    def on_page_progress(page: int, count: int, org_name: str = org_name) -> None:
+                        nonlocal repos_found
+                        repos_found = len(all_repos) + count
+                        org_display = org_name[:30].ljust(30)
+                        progress.update(
+                            task_id,
+                            description=f"Discovering {org_display} ({repos_found} repos)",
+                        )
+
+                    repos = await scanner.list_org_repos(
+                        org_name,
+                        include_archived=include_archived,
+                        include_forks=include_forks,
+                        on_progress=on_page_progress,
+                    )
+                    all_repos.extend((r.full_name, r.html_url) for r in repos)
+                    repos_found = len(all_repos)
+                    progress.update(task_id, completed=i + 1)
+                return all_repos
+
+        with progress:
+            repos = asyncio.run(discover_repos())
+    else:
+        if len(orgs) == 1:
+            print_info(f"Discovering repositories in '{orgs[0]}'...")
+        else:
+            print_info(f"Discovering repositories across {len(orgs)} organizations...")
+
+        async def discover_repos() -> list[tuple[str, str]]:
+            async with GitHubClient(token=token, concurrency=settings.github.concurrency) as client:
+                scanner = OrgScanner(client)
+                all_repos: list[tuple[str, str]] = []
+                for org_name in orgs:
+                    repos = await scanner.list_org_repos(
+                        org_name,
+                        include_archived=include_archived,
+                        include_forks=include_forks,
+                    )
+                    all_repos.extend((r.full_name, r.html_url) for r in repos)
+                return all_repos
+
+        repos = asyncio.run(discover_repos())
     print_info(f"Found {len(repos)} repositories")
     repo_info = []
     for full_name, url in repos:
