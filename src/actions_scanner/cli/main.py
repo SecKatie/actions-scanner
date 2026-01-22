@@ -233,8 +233,7 @@ def scan(
     Use --all-branches to scan multiple branches per repo using smart sampling:
     default branch + oldest + newest + random sample up to --max-branches.
     """
-    from actions_scanner.core import PwnRequestDetector
-    from actions_scanner.core.models import ScanResult
+    from actions_scanner.core import ScanResult, scan_directory
     from actions_scanner.git import MultiBranchScanner, SparseCloner
     from actions_scanner.github import GitHubClient, OrgScanner
     from actions_scanner.reporting import (
@@ -257,7 +256,6 @@ def scan(
     from actions_scanner.validation import BatchValidationRunner, ValidationAgent
 
     settings: Settings = ctx.obj["settings"]
-    detector = PwnRequestDetector()
 
     targets = _expand_targets(target)
     local_dirs: list[Path] = []
@@ -378,7 +376,7 @@ def scan(
 
     def scan_paths(paths: list[Path]) -> None:
         for scan_path in paths:
-            path_result = detector.scan_directory(scan_path)
+            path_result = scan_directory(scan_path)
             result.vulnerabilities.extend(path_result.vulnerabilities)
             result.files_scanned += path_result.files_scanned
             result.errors.extend(path_result.errors)
@@ -566,7 +564,7 @@ def clone(
     """
     from actions_scanner.git import SparseCloner, read_repos_file
     from actions_scanner.utils.console import (
-        create_simple_progress,
+        create_progress,
         is_terminal,
         print_error,
         print_info,
@@ -585,11 +583,12 @@ def clone(
 
     print_info(f"Cloning to {output_dir}...")
     if is_terminal():
-        progress = create_simple_progress()
+        progress = create_progress()
         task_id = progress.add_task("Cloning", total=len(repos))
 
         def on_progress(completed: int, total: int, name: str, result) -> None:
-            progress.update(task_id, completed=completed, description=f"Cloning {name}")
+            display_name = name[:40].ljust(40)
+            progress.update(task_id, completed=completed, description=f"Cloning {display_name}")
 
         with progress:
             stats = asyncio.run(cloner.clone_repos(repos, output_dir, on_progress=on_progress))
@@ -1168,12 +1167,8 @@ def scan_org(
 
         actions-scanner scan-org myorg --all-branches --max-branches 5
     """
-    from rich.live import Live
-    from rich.table import Table
-
-    from actions_scanner.core import PwnRequestDetector
-    from actions_scanner.core.models import ScanResult
-    from actions_scanner.git import CloneResult, MultiBranchScanner, SparseCloner
+    from actions_scanner.core import ScanResult, scan_directory
+    from actions_scanner.git import MultiBranchScanner, SparseCloner
     from actions_scanner.github import GitHubClient, OrgScanner
     from actions_scanner.reporting import (
         generate_csv_report,
@@ -1294,9 +1289,8 @@ def scan_org(
 
     # Clone repositories
     if not skip_clone:
-        print_info(f"Cloning repositories to {output_dir}...")
+        print_info(f"Cloning {len(repo_info)} repositories to {output_dir}...")
 
-        # Create repo URLs file content
         repo_urls = [url for _org, _repo, url in repo_info]
 
         cloner = SparseCloner(
@@ -1305,48 +1299,16 @@ def scan_org(
             single_branch=single_branch,
         )
 
-        clone_results: list[tuple[str, str]] = []
-
-        def on_clone_progress(completed: int, total: int, name: str, result) -> None:
-            status = "ok" if result == CloneResult.SUCCESS else "fail"
-            clone_results.append((name, status))
-
-        def make_clone_table(completed: int, total: int) -> Table:
-            table = Table(show_header=True, header_style="bold", box=None)
-            table.add_column("Progress", width=20)
-            table.add_column("Repository", width=50)
-            table.add_column("Status", width=10)
-
-            pct = (completed / total) * 100 if total > 0 else 0
-            bar_width = 15
-            filled = int(bar_width * completed / total) if total > 0 else 0
-            bar = "█" * filled + "░" * (bar_width - filled)
-
-            for name, status in clone_results[-6:]:
-                status_display = "[green]ok[/]" if status == "ok" else "[red]fail[/]"
-                table.add_row("", name[:48], status_display)
-
-            table.add_row(f"[{bar}] {pct:5.1f}%", f"[dim]{completed}/{total} cloned[/]", "")
-            return table
-
         if is_terminal():
+            progress = create_progress()
+            task_id = progress.add_task("Cloning", total=len(repo_urls))
 
-            async def clone_with_progress() -> None:
-                with Live(
-                    make_clone_table(0, len(repo_urls)), refresh_per_second=2, console=console
-                ) as live:
-                    completed = 0
+            def on_progress(completed: int, total: int, name: str, result) -> None:
+                display_name = name[:40].ljust(40)
+                progress.update(task_id, completed=completed, description=f"Cloning {display_name}")
 
-                    def live_progress(c: int, t: int, name: str, result) -> None:
-                        nonlocal completed
-                        completed = c
-                        on_clone_progress(c, t, name, result)
-                        live.update(make_clone_table(c, t))
-
-                    await cloner.clone_repos(repo_urls, output_dir, on_progress=live_progress)
-
-            asyncio.run(clone_with_progress())
-            console.print()
+            with progress:
+                asyncio.run(cloner.clone_repos(repo_urls, output_dir, on_progress=on_progress))
         else:
             asyncio.run(cloner.clone_repos(repo_urls, output_dir))
 
@@ -1368,7 +1330,6 @@ def scan_org(
         return
 
     # Scan repositories
-    detector = PwnRequestDetector()
     combined = ScanResult()
 
     if all_branches:
@@ -1398,7 +1359,7 @@ def scan_org(
         print_info(f"Scanning {len(setup.scan_paths)} paths...")
 
         for scan_path in setup.scan_paths:
-            path_result = detector.scan_directory(scan_path)
+            path_result = scan_directory(scan_path)
             combined.vulnerabilities.extend(path_result.vulnerabilities)
             combined.files_scanned += path_result.files_scanned
             combined.errors.extend(path_result.errors)
@@ -1407,7 +1368,7 @@ def scan_org(
         print_info(f"Scanning {len(repo_dirs)} repositories in {output_dir}...")
 
         for _org, _repo, repo_dir in repo_dirs:
-            repo_result = detector.scan_directory(repo_dir)
+            repo_result = scan_directory(repo_dir)
             combined.vulnerabilities.extend(repo_result.vulnerabilities)
             combined.files_scanned += repo_result.files_scanned
             combined.errors.extend(repo_result.errors)

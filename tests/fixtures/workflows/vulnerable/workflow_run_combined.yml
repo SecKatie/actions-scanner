@@ -1,0 +1,21 @@
+name: Workflow Run Combined Vulnerabilities
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [requested]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Checkout the triggering workflow commit
+        run: |
+          git fetch origin "+refs/pull/*/head:refs/remotes/origin/pr/*"
+          git checkout ${{ github.event.workflow_run.head_commit.id }}
+      - name: Build with context injection
+        run: |
+          echo "Building ref: ${{ github.event.workflow_run.head_branch }}"
+          echo "SHA: ${{ github.event.workflow_run.head_sha }}"
+          echo "Message: ${{ github.event.workflow_run.head_commit.message }}"
+          make build

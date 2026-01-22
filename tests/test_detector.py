@@ -1,10 +1,15 @@
-"""Tests for the PwnRequest and WorkflowRun vulnerability detectors."""
+"""Tests for the PwnRequest, WorkflowRun, and ContextInjection vulnerability detectors."""
 
 from pathlib import Path
 
 import pytest
 
-from actions_scanner.core import PwnRequestDetector, VulnerableJob, WorkflowRunDetector
+from actions_scanner.core import (
+    ContextInjectionDetector,
+    PwnRequestDetector,
+    VulnerableJob,
+    WorkflowRunDetector,
+)
 from actions_scanner.core.models import ProtectionLevel, VulnerabilityType
 
 
@@ -352,3 +357,154 @@ class TestWorkflowRunDetector:
         )
         assert vuln.vulnerability_type == "workflow_run"
         assert vuln.to_dict()["vulnerability_type"] == "workflow_run"
+
+
+class TestContextInjectionDetector:
+    """Tests for ContextInjectionDetector class."""
+
+    @pytest.fixture
+    def detector(self) -> ContextInjectionDetector:
+        """Create a detector instance."""
+        return ContextInjectionDetector()
+
+    def test_detect_pr_target_context_injection(
+        self, detector: ContextInjectionDetector, context_injection_pr_target_path: Path
+    ) -> None:
+        """Test detection of context injection in pull_request_target."""
+        vulns = detector.analyze_workflow(context_injection_pr_target_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.vulnerability_type == VulnerabilityType.CONTEXT_INJECTION.value
+        assert "github.head_ref" in vuln.checkout_ref
+        assert vuln.exec_type == "context_injection"
+        assert vuln.is_exploitable()
+
+    def test_detect_workflow_run_context_injection(
+        self, detector: ContextInjectionDetector, context_injection_workflow_run_path: Path
+    ) -> None:
+        """Test detection of context injection in workflow_run."""
+        vulns = detector.analyze_workflow(context_injection_workflow_run_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.vulnerability_type == VulnerabilityType.CONTEXT_INJECTION.value
+        assert "head_branch" in vuln.checkout_ref or "head_repository" in vuln.checkout_ref
+        assert vuln.exec_type == "context_injection"
+        assert vuln.is_exploitable()
+
+    def test_safe_env_context_usage(
+        self, detector: ContextInjectionDetector, context_injection_safe_path: Path
+    ) -> None:
+        """Test that env: usage of context is not flagged.
+
+        Using context in env: then referencing as $VAR in run is safe because
+        the shell doesn't interpret the variable content as code.
+        """
+        vulns = detector.analyze_workflow(context_injection_safe_path)
+
+        # Safe pattern - context is in env:, not directly in run: block
+        assert len(vulns) == 0
+
+    def test_no_detection_without_dangerous_trigger(
+        self, detector: ContextInjectionDetector, tmp_path: Path
+    ) -> None:
+        """Test that regular pull_request trigger is not flagged."""
+        workflow = tmp_path / "safe.yml"
+        workflow.write_text("""
+name: Safe
+on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.head_ref }}"
+""")
+        vulns = detector.analyze_workflow(workflow)
+
+        # Regular pull_request is safe - attacker code has limited privileges
+        assert len(vulns) == 0
+
+    def test_vulnerability_type_field(self) -> None:
+        """Test that ContextInjectionDetector sets the correct vulnerability type."""
+        vuln = VulnerableJob(
+            workflow_path=Path("test.yml"),
+            job_name="test",
+            checkout_line=0,
+            checkout_ref="${{ github.head_ref }}",
+            exec_line=15,
+            exec_type="context_injection",
+            exec_value='echo "Branch: ${{ github.head_ref }}"',
+            vulnerability_type=VulnerabilityType.CONTEXT_INJECTION.value,
+        )
+        assert vuln.vulnerability_type == "context_injection"
+        assert vuln.to_dict()["vulnerability_type"] == "context_injection"
+
+    def test_pr_target_not_flagged_by_workflow_run_detector(
+        self, context_injection_pr_target_path: Path
+    ) -> None:
+        """Test that PR target context injection is not caught by WorkflowRunDetector."""
+        detector = WorkflowRunDetector()
+        vulns = detector.analyze_workflow(context_injection_pr_target_path)
+
+        # WorkflowRunDetector should not detect pull_request_target workflows
+        assert len(vulns) == 0
+
+    def test_workflow_run_not_flagged_by_pwnrequest_detector(
+        self, context_injection_workflow_run_path: Path
+    ) -> None:
+        """Test that workflow_run context injection is not caught by PwnRequestDetector."""
+        detector = PwnRequestDetector()
+        vulns = detector.analyze_workflow(context_injection_workflow_run_path)
+
+        # PwnRequestDetector should not detect workflow_run workflows
+        assert len(vulns) == 0
+
+
+class TestScanDirectory:
+    """Tests for the module-level scan_directory function.
+
+    Regression tests to ensure all vulnerability types are detected.
+    """
+
+    def test_scan_directory_detects_all_vulnerability_types(
+        self, workflow_run_combined_path: Path, tmp_path: Path
+    ) -> None:
+        """Regression test: scan_directory must detect workflow_run and context_injection.
+
+        This test ensures the CLI uses all detectors, not just PwnRequestDetector.
+        Regression for: stolostron/gatekeeper-operator-fbc pattern.
+        """
+        from actions_scanner.core import scan_directory
+
+        # Create a temp repo structure with the combined workflow
+        workflows_dir = tmp_path / ".github" / "workflows"
+        workflows_dir.mkdir(parents=True)
+
+        # Copy the combined workflow
+        import shutil
+
+        shutil.copy(workflow_run_combined_path, workflows_dir / "generate.yml")
+
+        # Scan the directory
+        result = scan_directory(tmp_path)
+
+        # Must detect both vulnerability types
+        vuln_types = {v.vulnerability_type for v in result.vulnerabilities}
+        assert "workflow_run" in vuln_types, (
+            "scan_directory must detect workflow_run vulnerabilities"
+        )
+        assert "context_injection" in vuln_types, (
+            "scan_directory must detect context_injection vulnerabilities"
+        )
+        assert len(result.vulnerabilities) >= 2
+
+    def test_scan_directory_detects_pwnrequest(self, fake_repo_dir: Path) -> None:
+        """Test that scan_directory also detects pwnrequest vulnerabilities."""
+        from actions_scanner.core import scan_directory
+
+        result = scan_directory(fake_repo_dir)
+
+        # fake_repo_dir should have pwnrequest vulnerabilities
+        vuln_types = {v.vulnerability_type for v in result.vulnerabilities}
+        assert "pwnrequest" in vuln_types, "scan_directory must detect pwnrequest vulnerabilities"

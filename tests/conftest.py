@@ -124,3 +124,30 @@ def temp_repo(tmp_path: Path) -> Path:
     github_dir = tmp_path / ".github" / "workflows"
     github_dir.mkdir(parents=True)
     return tmp_path
+
+
+@pytest.fixture
+def context_injection_pr_target_path(workflows_dir: Path) -> Path:
+    """Return path to a context injection PR target workflow."""
+    return workflows_dir / "vulnerable" / "context_injection_pr_target.yml"
+
+
+@pytest.fixture
+def context_injection_workflow_run_path(workflows_dir: Path) -> Path:
+    """Return path to a context injection workflow_run workflow."""
+    return workflows_dir / "vulnerable" / "context_injection_workflow_run.yml"
+
+
+@pytest.fixture
+def context_injection_safe_path(workflows_dir: Path) -> Path:
+    """Return path to a safe context usage workflow."""
+    return workflows_dir / "safe" / "context_injection_safe.yml"
+
+
+@pytest.fixture
+def workflow_run_combined_path(workflows_dir: Path) -> Path:
+    """Return path to a workflow_run workflow with both checkout and context injection.
+
+    Regression test fixture for stolostron/gatekeeper-operator-fbc pattern.
+    """
+    return workflows_dir / "vulnerable" / "workflow_run_combined.yml"

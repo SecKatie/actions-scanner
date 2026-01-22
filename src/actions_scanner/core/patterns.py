@@ -184,3 +184,33 @@ WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS = [
     r"git\s+checkout\s+.*github\.event\.workflow_run\.head_commit",
     r"git\s+checkout\s+.*github\.event\.workflow_run\.head_sha",
 ]
+
+# Context variables for pull_request_target that can be injected directly into run blocks
+# These are attacker-controlled values that should NOT be interpolated in shell commands
+PR_TARGET_INJECTABLE_CONTEXTS = [
+    r"github\.head_ref",
+    r"github\.event\.pull_request\.head\.ref",
+    r"github\.event\.pull_request\.head\.label",
+    r"github\.event\.pull_request\.title",
+    r"github\.event\.pull_request\.body",
+    r"github\.event\.pull_request\.head\.repo\.full_name",
+    r"github\.event\.pull_request\.head\.repo\.name",
+    r"github\.event\.comment\.body",
+    r"github\.event\.review\.body",
+    r"github\.event\.issue\.title",
+    r"github\.event\.issue\.body",
+]
+
+# Context variables for workflow_run that can be injected directly into run blocks
+# These are attacker-controlled values from the triggering workflow
+WORKFLOW_RUN_INJECTABLE_CONTEXTS = [
+    r"github\.event\.workflow_run\.head_branch",
+    r"github\.event\.workflow_run\.head_repository\.full_name",
+    r"github\.event\.workflow_run\.head_repository\.name",
+    r"github\.event\.workflow_run\.head_repository\.default_branch",
+    r"github\.event\.workflow_run\.head_commit\.message",
+    r"github\.event\.workflow_run\.head_commit\.author\.name",
+    r"github\.event\.workflow_run\.head_commit\.author\.email",
+    r"github\.event\.workflow_run\.display_title",
+    r"github\.event\.workflow_run\.pull_requests\[\d*\]\.head\.ref",
+]
