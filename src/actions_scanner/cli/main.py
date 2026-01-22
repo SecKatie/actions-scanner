@@ -326,6 +326,10 @@ def scan(
             with progress:
                 org_repo_urls = asyncio.run(discover_org_repos())
         else:
+            if len(orgs) == 1:
+                print_info(f"Discovering repositories in '{orgs[0]}'...")
+            else:
+                print_info(f"Discovering repositories across {len(orgs)} organizations...")
 
             async def discover_org_repos() -> list[str]:
                 async with GitHubClient(
@@ -341,6 +345,7 @@ def scan(
                     return results
 
             org_repo_urls = asyncio.run(discover_org_repos())
+        print_info(f"Found {len(org_repo_urls)} repositories in {len(orgs)} organization(s)")
         repo_urls.extend(org_repo_urls)
 
     repo_urls = sorted(set(repo_urls))
@@ -1269,7 +1274,7 @@ def scan_org(
                 return all_repos
 
         repos = asyncio.run(discover_repos())
-    print_info(f"Found {len(repos)} repositories")
+    print_info(f"Found {len(repos)} repositories in {len(orgs)} organization(s)")
     repo_info = []
     for full_name, url in repos:
         if "/" in full_name:
