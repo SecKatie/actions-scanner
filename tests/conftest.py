@@ -151,3 +151,53 @@ def workflow_run_combined_path(workflows_dir: Path) -> Path:
     Regression test fixture for stolostron/gatekeeper-operator-fbc pattern.
     """
     return workflows_dir / "vulnerable" / "workflow_run_combined.yml"
+
+
+@pytest.fixture
+def context_injection_issues_path(workflows_dir: Path) -> Path:
+    """Return path to an issues trigger context injection workflow.
+
+    Regression test fixture for redhat-performance/quads issuetracker.yml pattern.
+    """
+    return workflows_dir / "vulnerable" / "context_injection_issues.yml"
+
+
+@pytest.fixture
+def artifact_injection_path(workflows_dir: Path) -> Path:
+    """Return path to an artifact injection workflow.
+
+    Regression test fixture for redhat-developer/intellij-openshift-connector sonar.yml pattern.
+    """
+    return workflows_dir / "vulnerable" / "artifact_injection.yml"
+
+
+@pytest.fixture
+def safe_workflow_run_sonar_path(workflows_dir: Path) -> Path:
+    """Return path to a safe SonarCloud workflow_run workflow.
+
+    Regression test fixture for ansible/galaxy_ng sonar-pr.yaml pattern.
+    This workflow downloads artifacts and uses gh pr checkout, but only for
+    static analysis - no dangerous code execution patterns are present.
+    """
+    return workflows_dir / "safe" / "workflow_run_sonar.yml"
+
+
+@pytest.fixture
+def dispatch_checkout_vulnerable_path(workflows_dir: Path) -> Path:
+    """Return path to a vulnerable dispatch checkout workflow.
+
+    Regression test fixture for containers/kubernetes-mcp-server gevals.yaml pattern.
+    This workflow is triggered by issue_comment, checks out PR code via job outputs,
+    and executes build commands - a confused deputy attack.
+    """
+    return workflows_dir / "vulnerable" / "dispatch_checkout.yml"
+
+
+@pytest.fixture
+def dispatch_checkout_safe_path(workflows_dir: Path) -> Path:
+    """Return path to a safe issue_comment workflow.
+
+    This workflow is triggered by issue_comment but only checks out the base branch,
+    never executing untrusted PR code.
+    """
+    return workflows_dir / "safe" / "dispatch_checkout_safe.yml"

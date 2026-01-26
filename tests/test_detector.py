@@ -1,11 +1,13 @@
-"""Tests for the PwnRequest, WorkflowRun, and ContextInjection vulnerability detectors."""
+"""Tests for the PwnRequest, WorkflowRun, ContextInjection, and other vulnerability detectors."""
 
 from pathlib import Path
 
 import pytest
 
 from actions_scanner.core import (
+    ArtifactInjectionDetector,
     ContextInjectionDetector,
+    DispatchCheckoutDetector,
     PwnRequestDetector,
     VulnerableJob,
     WorkflowRunDetector,
@@ -459,6 +461,154 @@ jobs:
 
         # PwnRequestDetector should not detect workflow_run workflows
         assert len(vulns) == 0
+
+    def test_detect_issues_context_injection(
+        self, detector: ContextInjectionDetector, context_injection_issues_path: Path
+    ) -> None:
+        """Test detection of context injection in issues trigger workflow.
+
+        Regression test for redhat-performance/quads issuetracker.yml pattern.
+        Anyone can create an issue with a malicious title to achieve command injection.
+        """
+        vulns = detector.analyze_workflow(context_injection_issues_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.vulnerability_type == VulnerabilityType.CONTEXT_INJECTION.value
+        assert "issue" in vuln.checkout_ref.lower()
+        assert vuln.exec_type == "context_injection"
+        assert vuln.is_exploitable()
+
+
+class TestArtifactInjectionDetector:
+    """Tests for ArtifactInjectionDetector class."""
+
+    @pytest.fixture
+    def detector(self) -> ArtifactInjectionDetector:
+        """Create a detector instance."""
+        return ArtifactInjectionDetector()
+
+    def test_detect_artifact_injection(
+        self, detector: ArtifactInjectionDetector, artifact_injection_path: Path
+    ) -> None:
+        """Test detection of artifact injection in workflow_run workflow.
+
+        Regression test for redhat-developer/intellij-openshift-connector sonar.yml pattern.
+        An attacker can control artifact content via a malicious PR, then the workflow_run
+        reads that content into shell commands.
+        """
+        vulns = detector.analyze_workflow(artifact_injection_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.vulnerability_type == VulnerabilityType.ARTIFACT_INJECTION.value
+        assert "artifact" in vuln.checkout_ref.lower()
+        assert vuln.exec_type == "artifact_read"
+        assert vuln.is_exploitable()
+
+    def test_no_detection_without_workflow_run(
+        self, detector: ArtifactInjectionDetector, vulnerable_workflow_path: Path
+    ) -> None:
+        """Test that non-workflow_run workflows are not flagged."""
+        vulns = detector.analyze_workflow(vulnerable_workflow_path)
+
+        # ArtifactInjectionDetector should not detect pull_request_target workflows
+        assert len(vulns) == 0
+
+    def test_vulnerability_type_field(self) -> None:
+        """Test that ArtifactInjectionDetector sets the correct vulnerability type."""
+        vuln = VulnerableJob(
+            workflow_path=Path("test.yml"),
+            job_name="test",
+            checkout_line=10,
+            checkout_ref="artifact from workflow_run",
+            exec_line=15,
+            exec_type="artifact_read",
+            exec_value="$(<prInfo/branch)",
+            vulnerability_type=VulnerabilityType.ARTIFACT_INJECTION.value,
+        )
+        assert vuln.vulnerability_type == "artifact_injection"
+        assert vuln.to_dict()["vulnerability_type"] == "artifact_injection"
+
+    def test_safe_sonarcloud_workflow_not_flagged(
+        self, detector: ArtifactInjectionDetector, safe_workflow_run_sonar_path: Path
+    ) -> None:
+        """Test that SonarCloud-style workflows are not flagged as vulnerable.
+
+        Regression test for ansible/galaxy_ng sonar-pr.yaml false positive.
+        This workflow downloads artifacts and uses gh pr checkout, but only for
+        static analysis - no dangerous artifact content reading into shell commands.
+        """
+        vulns = detector.analyze_workflow(safe_workflow_run_sonar_path)
+
+        # Should not detect any vulnerabilities - no dangerous artifact read patterns
+        assert len(vulns) == 0
+
+
+class TestDispatchCheckoutDetector:
+    """Tests for DispatchCheckoutDetector class (confused deputy via issue_comment)."""
+
+    @pytest.fixture
+    def detector(self) -> DispatchCheckoutDetector:
+        """Create a detector instance."""
+        return DispatchCheckoutDetector()
+
+    def test_detect_dispatch_checkout_vulnerability(
+        self, detector: DispatchCheckoutDetector, dispatch_checkout_vulnerable_path: Path
+    ) -> None:
+        """Test detection of confused deputy vulnerability via issue_comment.
+
+        Regression test for containers/kubernetes-mcp-server gevals.yaml pattern.
+        This workflow:
+        1. Triggered by issue_comment
+        2. Permission check validates the COMMENTER (confused deputy!)
+        3. Checks out PR code via job outputs
+        4. Executes make commands on attacker's code
+        """
+        vulns = detector.analyze_workflow(dispatch_checkout_vulnerable_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.vulnerability_type == VulnerabilityType.DISPATCH_CHECKOUT.value
+        assert vuln.exec_type == "build_command"
+        assert vuln.is_exploitable()
+
+    def test_safe_issue_comment_not_flagged(
+        self, detector: DispatchCheckoutDetector, dispatch_checkout_safe_path: Path
+    ) -> None:
+        """Test that issue_comment workflows without PR checkout are not flagged.
+
+        This workflow responds to comments but only checks out the base branch,
+        never executing untrusted PR code.
+        """
+        vulns = detector.analyze_workflow(dispatch_checkout_safe_path)
+
+        # Should not detect any vulnerabilities - no PR code checkout
+        assert len(vulns) == 0
+
+    def test_no_detection_without_issue_comment_trigger(
+        self, detector: DispatchCheckoutDetector, vulnerable_workflow_path: Path
+    ) -> None:
+        """Test that non-issue_comment workflows are not flagged."""
+        vulns = detector.analyze_workflow(vulnerable_workflow_path)
+
+        # DispatchCheckoutDetector should only detect issue_comment workflows
+        assert len(vulns) == 0
+
+    def test_vulnerability_type_field(self) -> None:
+        """Test that DispatchCheckoutDetector sets the correct vulnerability type."""
+        vuln = VulnerableJob(
+            workflow_path=Path("test.yml"),
+            job_name="test",
+            checkout_line=10,
+            checkout_ref="refs/pull/${{ needs.check.outputs.pr-ref }}/head",
+            exec_line=15,
+            exec_type="build_command",
+            exec_value="make test",
+            vulnerability_type=VulnerabilityType.DISPATCH_CHECKOUT.value,
+        )
+        assert vuln.vulnerability_type == "dispatch_checkout"
+        assert vuln.to_dict()["vulnerability_type"] == "dispatch_checkout"
 
 
 class TestScanDirectory:

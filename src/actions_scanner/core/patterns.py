@@ -187,14 +187,15 @@ WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS = [
 
 # Context variables for pull_request_target that can be injected directly into run blocks
 # These are attacker-controlled values that should NOT be interpolated in shell commands
+# NOTE: github.event.pull_request.head.repo.full_name and .name are NOT included here
+# because GitHub constrains repo/owner names to alphanumeric, hyphens, underscores, and dots
+# which cannot be used for shell injection attacks
 PR_TARGET_INJECTABLE_CONTEXTS = [
     r"github\.head_ref",
     r"github\.event\.pull_request\.head\.ref",
     r"github\.event\.pull_request\.head\.label",
     r"github\.event\.pull_request\.title",
     r"github\.event\.pull_request\.body",
-    r"github\.event\.pull_request\.head\.repo\.full_name",
-    r"github\.event\.pull_request\.head\.repo\.name",
     r"github\.event\.comment\.body",
     r"github\.event\.review\.body",
     r"github\.event\.issue\.title",
@@ -203,14 +204,78 @@ PR_TARGET_INJECTABLE_CONTEXTS = [
 
 # Context variables for workflow_run that can be injected directly into run blocks
 # These are attacker-controlled values from the triggering workflow
+# NOTE: head_repository.full_name and .name are NOT included here because GitHub
+# constrains repo/owner names to alphanumeric, hyphens, underscores, and dots
 WORKFLOW_RUN_INJECTABLE_CONTEXTS = [
     r"github\.event\.workflow_run\.head_branch",
-    r"github\.event\.workflow_run\.head_repository\.full_name",
-    r"github\.event\.workflow_run\.head_repository\.name",
     r"github\.event\.workflow_run\.head_repository\.default_branch",
     r"github\.event\.workflow_run\.head_commit\.message",
     r"github\.event\.workflow_run\.head_commit\.author\.name",
     r"github\.event\.workflow_run\.head_commit\.author\.email",
     r"github\.event\.workflow_run\.display_title",
     r"github\.event\.workflow_run\.pull_requests\[\d*\]\.head\.ref",
+]
+
+# Context variables for issues trigger that can be injected directly into run blocks
+# These are attacker-controlled values - anyone can create an issue with malicious content
+ISSUES_INJECTABLE_CONTEXTS = [
+    r"github\.event\.issue\.title",
+    r"github\.event\.issue\.body",
+    r"github\.event\.issue\.user\.login",
+    r"github\.event\.issue\.user\.name",
+]
+
+# Context variables for issue_comment trigger that can be injected directly into run blocks
+# These are attacker-controlled - anyone who can comment can inject content
+ISSUE_COMMENT_INJECTABLE_CONTEXTS = [
+    r"github\.event\.comment\.body",
+    r"github\.event\.comment\.user\.login",
+    r"github\.event\.comment\.user\.name",
+    r"github\.event\.issue\.title",
+    r"github\.event\.issue\.body",
+]
+
+# Context variables for discussion/discussion_comment triggers
+# These are attacker-controlled - anyone who can participate in discussions can inject content
+DISCUSSION_INJECTABLE_CONTEXTS = [
+    r"github\.event\.discussion\.title",
+    r"github\.event\.discussion\.body",
+    r"github\.event\.discussion\.user\.login",
+    r"github\.event\.comment\.body",
+    r"github\.event\.comment\.user\.login",
+]
+
+# Patterns for artifact download that retrieves artifacts from the triggering workflow
+# When combined with workflow_run, this allows attacker-controlled artifact content
+WORKFLOW_RUN_ARTIFACT_DOWNLOAD_PATTERNS = [
+    r"github\.event\.workflow_run\.id",  # run-id from workflow_run
+]
+
+# Patterns for issue_comment/workflow_dispatch checkout of PR code
+# These patterns indicate dynamic checkout of PR code based on issue/PR number
+# When triggered by issue_comment, an attacker's PR code gets executed with elevated privileges
+DISPATCH_PR_CHECKOUT_PATTERNS = [
+    # refs/pull/N/head patterns with dynamic PR number from issue
+    r"refs/pull/\$\{\{.*github\.event\.issue\.number.*\}\}/(head|merge)",
+    r"refs/pull/\$\{\{.*needs\.[^}]+\.outputs\.[^}]*(pr-number|pr_number|number)[^}]*\}\}/(head|merge)",
+    # Job outputs that construct PR refs
+    r"refs/pull/\$\{\{.*env\.[^}]*(PR_NUMBER|pr_number)[^}]*\}\}/(head|merge)",
+]
+
+# Patterns indicating a job is referencing PR context from issue_comment
+# These indicate the workflow is trying to act on a PR from an issue comment
+ISSUE_COMMENT_PR_PATTERNS = [
+    r"github\.event\.issue\.pull_request",  # Check if issue is a PR
+]
+
+# Patterns for reading file content into shell variables or commands
+# These patterns indicate artifact content being used unsafely in shell commands
+ARTIFACT_READ_PATTERNS = [
+    r"\$\(<[^)]+\)",  # $(<file) - bash file read
+    r"\$\(cat\s+[^)]+\)",  # $(cat file) - subshell cat
+    r"`cat\s+[^`]+`",  # `cat file` - backtick subshell
+    r"cat\s+\S+\s*\|",  # cat file | - piped cat
+    r"source\s+\S+",  # source file - sourcing a file (require path)
+    r"^\s*\.\s+[\./$]",  # . file - dot sourcing at line start with path (./file, /file, $var)
+    r"[;&|]\s*\.\s+[\./$]",  # . file - dot sourcing after separator with path
 ]

@@ -22,6 +22,8 @@ class VulnerabilityType(str, Enum):
     PWNREQUEST = "pwnrequest"  # pull_request_target trigger
     WORKFLOW_RUN = "workflow_run"  # workflow_run trigger
     CONTEXT_INJECTION = "context_injection"  # Direct ${{ }} injection in run blocks
+    ARTIFACT_INJECTION = "artifact_injection"  # Reading artifact content into shell commands
+    DISPATCH_CHECKOUT = "dispatch_checkout"  # issue_comment/workflow_dispatch checkout of PR code
 
 
 class ExecType(str, Enum):

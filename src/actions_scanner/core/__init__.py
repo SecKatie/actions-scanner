@@ -1,7 +1,9 @@
 """Core detection logic for workflow vulnerabilities."""
 
 from .detector import (
+    ArtifactInjectionDetector,
     ContextInjectionDetector,
+    DispatchCheckoutDetector,
     PwnRequestDetector,
     WorkflowRunDetector,
     analyze_workflow,
@@ -33,8 +35,10 @@ __all__ = [
     "WORKFLOW_RUN_DANGEROUS_REF_PATTERNS",
     "WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS",
     "WORKFLOW_RUN_INJECTABLE_CONTEXTS",
+    "ArtifactInjectionDetector",
     "BranchInfo",
     "ContextInjectionDetector",
+    "DispatchCheckoutDetector",
     "ExecType",
     "ProtectionLevel",
     "PwnRequestDetector",
