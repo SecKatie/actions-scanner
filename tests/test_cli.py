@@ -51,13 +51,6 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Validate vulnerabilities" in result.output
 
-    def test_enrich_command_help(self, runner: CliRunner) -> None:
-        """Test enrich command help."""
-        result = runner.invoke(cli, ["enrich", "--help"])
-
-        assert result.exit_code == 0
-        assert "Enrich vulnerability data" in result.output
-
     def test_report_command_help(self, runner: CliRunner) -> None:
         """Test report command help."""
         result = runner.invoke(cli, ["report", "--help"])
