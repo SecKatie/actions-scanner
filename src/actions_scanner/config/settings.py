@@ -55,19 +55,6 @@ class ValidationConfig(BaseModel):
     )
 
 
-class LDAPConfig(BaseModel):
-    """Configuration for optional LDAP enrichment."""
-
-    enabled: bool = Field(default=False, description="Enable LDAP enrichment")
-    host: str = Field(default="", description="LDAP server hostname")
-    base: str = Field(default="", description="LDAP search base DN")
-    social_url_attribute: str = Field(
-        default="rhatSocialURL", description="LDAP attribute containing social URLs"
-    )
-    bind_dn: str = Field(default="", description="Bind DN for LDAP authentication")
-    timeout: int = Field(default=10, description="LDAP connection timeout in seconds")
-
-
 class OutputConfig(BaseModel):
     """Configuration for output and reporting."""
 
@@ -94,7 +81,6 @@ class Settings(BaseSettings):
         ACTIONS_SCANNER_GITHUB__TOKEN=ghp_xxx
         ACTIONS_SCANNER_VALIDATION__ENABLED=true
         ACTIONS_SCANNER_VALIDATION__COMMAND_TEMPLATE='codex -m gpt-4 -p {}'
-        ACTIONS_SCANNER_LDAP__ENABLED=true
 
     Note: Do NOT include quotes around {} in command templates - shlex.quote() handles this.
     """
@@ -110,7 +96,6 @@ class Settings(BaseSettings):
     scan: ScanConfig = Field(default_factory=ScanConfig)
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
-    ldap: LDAPConfig = Field(default_factory=LDAPConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
     @classmethod

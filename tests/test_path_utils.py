@@ -62,7 +62,7 @@ def test_resolve_repo_dir_sparse_cloner_structure(tmp_path: Path) -> None:
 def test_resolve_repo_dir_sparse_cloner_master_branch(tmp_path: Path) -> None:
     """Test resolve_repo_dir handles 'master' as default branch."""
     base_dir = tmp_path / "master-test"
-    org, repo = "redhat", "test-repo"
+    org, repo = "myorg", "test-repo"
 
     repo_base = base_dir / org / repo
     code_dir = repo_base / "master" / "code"

@@ -3,7 +3,6 @@
 from .settings import (
     DEFAULT_CONFIG_PATHS,
     GitHubConfig,
-    LDAPConfig,
     OutputConfig,
     ScanConfig,
     Settings,
@@ -15,7 +14,6 @@ from .settings import (
 __all__ = [
     "DEFAULT_CONFIG_PATHS",
     "GitHubConfig",
-    "LDAPConfig",
     "OutputConfig",
     "ScanConfig",
     "Settings",

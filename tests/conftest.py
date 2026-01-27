@@ -155,19 +155,13 @@ def workflow_run_combined_path(workflows_dir: Path) -> Path:
 
 @pytest.fixture
 def context_injection_issues_path(workflows_dir: Path) -> Path:
-    """Return path to an issues trigger context injection workflow.
-
-    Regression test fixture for redhat-performance/quads issuetracker.yml pattern.
-    """
+    """Return path to an issues trigger context injection workflow."""
     return workflows_dir / "vulnerable" / "context_injection_issues.yml"
 
 
 @pytest.fixture
 def artifact_injection_path(workflows_dir: Path) -> Path:
-    """Return path to an artifact injection workflow.
-
-    Regression test fixture for redhat-developer/intellij-openshift-connector sonar.yml pattern.
-    """
+    """Return path to an artifact injection workflow."""
     return workflows_dir / "vulnerable" / "artifact_injection.yml"
 
 

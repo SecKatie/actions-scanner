@@ -14,7 +14,6 @@ class TestSettings:
         assert settings.scan.max_branches_per_repo == 100
         assert settings.github.concurrency == 50
         assert settings.validation.enabled is False
-        assert settings.ldap.enabled is False
         assert settings.output.format == "csv"
 
     def test_settings_from_dict(self) -> None:

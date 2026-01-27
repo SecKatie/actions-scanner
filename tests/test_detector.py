@@ -467,7 +467,6 @@ jobs:
     ) -> None:
         """Test detection of context injection in issues trigger workflow.
 
-        Regression test for redhat-performance/quads issuetracker.yml pattern.
         Anyone can create an issue with a malicious title to achieve command injection.
         """
         vulns = detector.analyze_workflow(context_injection_issues_path)
@@ -493,7 +492,6 @@ class TestArtifactInjectionDetector:
     ) -> None:
         """Test detection of artifact injection in workflow_run workflow.
 
-        Regression test for redhat-developer/intellij-openshift-connector sonar.yml pattern.
         An attacker can control artifact content via a malicious PR, then the workflow_run
         reads that content into shell commands.
         """

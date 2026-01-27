@@ -109,8 +109,6 @@ actions-scanner validate outputs/vulnerabilities.csv
 # 3. Export to other formats
 actions-scanner report outputs/vulnerabilities.csv -o outputs/vulnerabilities.md --format markdown
 
-# 4. Enrich CSV with maintainer data (optional)
-actions-scanner enrich outputs/vulnerabilities.csv -o outputs/vulnerabilities-with-mergers.csv --with-mergers
 ----
 
 // Interactive collapsible for prerequisites
@@ -124,10 +122,9 @@ See <<development,Development>> for prerequisites and setup instructions.
 == Workflow Pipeline
 
 image:https://img.shields.io/badge/Phase-Scan-orange["Phase 1"] →
-image:https://img.shields.io/badge/Phase-Validate-blue["Phase 2"] →
-image:https://img.shields.io/badge/Phase-Enrich-green["Phase 3"]
+image:https://img.shields.io/badge/Phase-Validate-blue["Phase 2"]
 
-The full analysis pipeline consists of three phases:
+The full analysis pipeline consists of two phases:
 
 [cols="1,1,1"]
 |===
@@ -140,10 +137,6 @@ The full analysis pipeline consists of three phases:
 |Phase 2
 |`outputs/vulnerabilities-validated.json`
 |`actions-scanner validate outputs/vulnerabilities.csv`
-
-|Phase 3
-|`outputs/vulnerabilities-with-mergers.csv`
-|`actions-scanner enrich outputs/vulnerabilities.csv --with-mergers`
 |===
 
 [[phase1]]
@@ -207,11 +200,11 @@ actions-scanner scan /path/to/repos --all-branches --max-branches 10 -o outputs/
 
 |`org`
 |GitHub organization
-|`redhat-developer`
+|`example-org`
 
 |`repo`
 |Repository name
-|`rhdh`
+|`example-repo`
 
 |`branch`
 |Branch name where vulnerability exists
@@ -259,7 +252,7 @@ actions-scanner scan /path/to/repos --all-branches --max-branches 10 -o outputs/
 
 |`workflow_path`
 |Local path to workflow file
-|`/tmp/actions-scanner-*/redhat-developer/rhdh/main/code/.github/workflows/ci.yml`
+|`/tmp/actions-scanner-*/example-org/example-repo/main/code/.github/workflows/ci.yml`
 |===
 
 **Protection Levels:**
@@ -286,40 +279,12 @@ actions-scanner scan /path/to/repos --all-branches --max-branches 10 -o outputs/
 [source,csv]
 ----
 org,repo,branch,workflow_file,job_name,checkout_line,checkout_ref,exec_line,exec_type,exec_value,protection,protection_detail
-redhat-developer,rhdh,main,ci.yml,build,42,${{ github.event.pull_request.head.sha }},47,build_command,npm install,none,No protections in place
+example-org,example-repo,main,ci.yml,build,42,${{ github.event.pull_request.head.sha }},47,build_command,npm install,none,No protections in place
 ----
 --
 
 [[phase4]]
-=== Phase 4: Find Maintainers
-
-Identify who merges PRs in vulnerable repositories (for outreach):
-
-[source,bash]
-----
-# Get PR merger information and merge into CSV
-actions-scanner enrich outputs/vulnerabilities.csv -o outputs/vulnerabilities-with-mergers.csv --with-mergers
-
-# View top maintainers
-head -20 outputs/vulnerabilities-with-mergers.csv
-----
-
-**Output:**
-
-* `outputs/vulnerabilities-with-mergers.csv` - Vulnerabilities with maintainer info
-
-[details="View sample PR merger output"]
---
-[source,csv]
-----
-org,repo,merger_login,merger_name,mergers_count
-redhat-developer,rhdh,janedoe,Jane Doe,42
-redhat-developer,rhdh,bobsmith,Bob Smith,28
-----
---
-
-[[phase5]]
-=== Phase 5: AI-Assisted Confirmation
+=== Phase 4: AI-Assisted Confirmation
 
 Use an AI agent to confirm vulnerabilities and document exploitation:
 
@@ -397,33 +362,6 @@ jq '[.vulnerabilities[] | select(.issue_type=="vulnerability")] | length' \
 cat /tmp/actions-scanner-*/org/repo/branch/code/confirmed_vulnerable.txt
 ----
 
-[[phase6]]
-=== Phase 6: Contributor Outreach (Red Hat specific)
-
-For Red Hat repositories, identify active employees to contact:
-
-[source,bash]
-----
-# Enrich with LDAP identity data (requires LDAP config)
-actions-scanner enrich outputs/vulnerabilities.csv -o outputs/vulnerabilities-with-ldap.csv --with-ldap
-----
-
-**Output Files:**
-
-* `outputs/vulnerabilities-with-ldap.csv` - Vulnerabilities with LDAP identity data
-
-[details="LDAP lookup configuration"]
---
-Configure LDAP via environment variables:
-
-[source,bash]
-----
-LDAP_SERVER="ldap://ldap.redhat.com"
-LDAP_BASE="dc=redhat,dc=com"
-LDAP_FILTER="(mail=*)"
-----
---
-
 // Better file reference with quick links
 [[file-reference]]
 == File Reference
@@ -441,10 +379,6 @@ LDAP_FILTER="(mail=*)"
 |`actions-scanner validate`
 |AI-assisted vulnerability confirmation
 |~2 min/repo
-
-|`actions-scanner enrich`
-|Add PR merger or LDAP identity data
-|~5 min/100 repos
 
 |`actions-scanner report`
 |Generate markdown or JSON reports from CSV
@@ -468,14 +402,6 @@ LDAP_FILTER="(mail=*)"
 |`outputs/vulnerabilities-validated.json`
 |Validated scanner output with AI confirmations
 |10 KB - 5 MB
-
-|`outputs/vulnerabilities-with-mergers.csv`
-|Combined vulnerability + maintainer data
-|15 KB - 7 MB
-
-|`outputs/vulnerabilities-with-ldap.csv`
-|Vulnerabilities with LDAP identity data
-|10 KB - 3 MB
 |===
 
 === Directories

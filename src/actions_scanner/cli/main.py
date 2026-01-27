@@ -1070,7 +1070,7 @@ def scan_org(
 
         actions-scanner scan-org ansible
 
-        actions-scanner scan-org redhat --include-forks -d repos/redhat
+        actions-scanner scan-org myorg --include-forks -d repos/myorg
 
         actions-scanner scan-org --org-file orgs.txt
 
