@@ -218,18 +218,20 @@ WORKFLOW_RUN_INJECTABLE_CONTEXTS = [
 
 # Context variables for issues trigger that can be injected directly into run blocks
 # These are attacker-controlled values - anyone can create an issue with malicious content
+# NOTE: .user.login is NOT included because GitHub usernames are constrained to
+# alphanumeric characters and hyphens [a-zA-Z0-9-], which cannot be used for shell injection.
+# .user.name IS included because display names are free-form text.
 ISSUES_INJECTABLE_CONTEXTS = [
     r"github\.event\.issue\.title",
     r"github\.event\.issue\.body",
-    r"github\.event\.issue\.user\.login",
     r"github\.event\.issue\.user\.name",
 ]
 
 # Context variables for issue_comment trigger that can be injected directly into run blocks
 # These are attacker-controlled - anyone who can comment can inject content
+# NOTE: .user.login is NOT included (see ISSUES_INJECTABLE_CONTEXTS note above)
 ISSUE_COMMENT_INJECTABLE_CONTEXTS = [
     r"github\.event\.comment\.body",
-    r"github\.event\.comment\.user\.login",
     r"github\.event\.comment\.user\.name",
     r"github\.event\.issue\.title",
     r"github\.event\.issue\.body",
@@ -237,12 +239,13 @@ ISSUE_COMMENT_INJECTABLE_CONTEXTS = [
 
 # Context variables for discussion/discussion_comment triggers
 # These are attacker-controlled - anyone who can participate in discussions can inject content
+# NOTE: .user.login is NOT included (see ISSUES_INJECTABLE_CONTEXTS note above)
 DISCUSSION_INJECTABLE_CONTEXTS = [
     r"github\.event\.discussion\.title",
     r"github\.event\.discussion\.body",
-    r"github\.event\.discussion\.user\.login",
+    r"github\.event\.discussion\.user\.name",
     r"github\.event\.comment\.body",
-    r"github\.event\.comment\.user\.login",
+    r"github\.event\.comment\.user\.name",
 ]
 
 # Patterns for artifact download that retrieves artifacts from the triggering workflow

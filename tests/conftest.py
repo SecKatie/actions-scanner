@@ -195,3 +195,23 @@ def dispatch_checkout_safe_path(workflows_dir: Path) -> Path:
     never executing untrusted PR code.
     """
     return workflows_dir / "safe" / "dispatch_checkout_safe.yml"
+
+
+@pytest.fixture
+def safe_user_login_issues_path(workflows_dir: Path) -> Path:
+    """Return path to a safe issues workflow that only uses .user.login.
+
+    Regression test: github.event.issue.user.login should NOT be flagged because
+    GitHub usernames are constrained to [a-zA-Z0-9-] and cannot contain shell metacharacters.
+    """
+    return workflows_dir / "safe" / "context_injection_safe_user_login.yml"
+
+
+@pytest.fixture
+def safe_user_login_issue_comment_path(workflows_dir: Path) -> Path:
+    """Return path to a safe issue_comment workflow that only uses .user.login.
+
+    Regression test: github.event.comment.user.login should NOT be flagged because
+    GitHub usernames are constrained to [a-zA-Z0-9-] and cannot contain shell metacharacters.
+    """
+    return workflows_dir / "safe" / "context_injection_safe_comment_user_login.yml"

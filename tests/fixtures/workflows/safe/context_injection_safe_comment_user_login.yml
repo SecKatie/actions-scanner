@@ -1,0 +1,18 @@
+name: comment-user-login-only
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  pull-requests: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/approve')
+    steps:
+      - name: Check commenter
+        run: |
+          COMMENT_USER="${{ github.event.comment.user.login }}"
+          echo "Checking authorization for user: $COMMENT_USER"
+          if yq eval '.aliases.approvers[] | select(. == "'${COMMENT_USER}'")' OWNERS | grep -q "${COMMENT_USER}"; then
+            echo "User ${COMMENT_USER} is authorized"
+          fi

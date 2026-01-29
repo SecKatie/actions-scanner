@@ -1,0 +1,14 @@
+name: issue-user-login-only
+on:
+  issues:
+    types: [opened]
+permissions:
+  issues: read
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log issue creator
+        run: |
+          echo "Issue opened by: ${{ github.event.issue.user.login }}"
+          echo "Issue number: ${{ github.event.issue.number }}"

@@ -468,15 +468,40 @@ jobs:
         """Test detection of context injection in issues trigger workflow.
 
         Anyone can create an issue with a malicious title to achieve command injection.
+        The issue title is attacker-controlled and can contain shell metacharacters.
         """
         vulns = detector.analyze_workflow(context_injection_issues_path)
 
         assert len(vulns) > 0
         vuln = vulns[0]
         assert vuln.vulnerability_type == VulnerabilityType.CONTEXT_INJECTION.value
-        assert "issue" in vuln.checkout_ref.lower()
+        assert "issue.title" in vuln.checkout_ref.lower()
         assert vuln.exec_type == "context_injection"
         assert vuln.is_exploitable()
+
+    def test_safe_user_login_not_flagged_issues(
+        self, detector: ContextInjectionDetector, safe_user_login_issues_path: Path
+    ) -> None:
+        """Test that .user.login is NOT flagged as context injection for issues trigger.
+
+        Regression test: GitHub usernames are constrained to [a-zA-Z0-9-] and cannot
+        contain shell metacharacters, so they are not injectable.
+        """
+        vulns = detector.analyze_workflow(safe_user_login_issues_path)
+
+        assert len(vulns) == 0
+
+    def test_safe_user_login_not_flagged_issue_comment(
+        self, detector: ContextInjectionDetector, safe_user_login_issue_comment_path: Path
+    ) -> None:
+        """Test that .user.login is NOT flagged as context injection for issue_comment trigger.
+
+        Regression test: GitHub usernames are constrained to [a-zA-Z0-9-] and cannot
+        contain shell metacharacters, so they are not injectable.
+        """
+        vulns = detector.analyze_workflow(safe_user_login_issue_comment_path)
+
+        assert len(vulns) == 0
 
 
 class TestArtifactInjectionDetector:
