@@ -1,0 +1,21 @@
+name: Sender-login gated workflow
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+
+jobs:
+  auto-merge:
+    # Only runs for specific bot sender - not exploitable by external attackers
+    if: ${{ github.event.sender.login == 'red-hat-konflux[bot]' && contains(github.event.pull_request.title, 'update operator-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge feasibility check
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          echo "Checking title: $TITLE"

@@ -8,7 +8,7 @@ import yaml
 
 from actions_scanner.utils.path import extract_org_repo_branch_from_path
 
-from .models import ScanResult, VulnerabilityType, VulnerableJob
+from .models import ProtectionLevel, ScanResult, VulnerabilityType, VulnerableJob
 from .patterns import (
     ACTOR_GATING_PATTERNS,
     ARTIFACT_READ_PATTERNS,
@@ -26,11 +26,16 @@ from .patterns import (
     PERMISSION_CHECK_PATTERNS,
     PERMISSION_OUTPUT_PATTERNS,
     PR_TARGET_INJECTABLE_CONTEXTS,
+    SAFE_ARTIFACT_EXTRACTION_PATTERNS,
+    SAFE_WORKFLOW_DISPATCH_REF_PATTERNS,
     SAME_REPO_PATTERNS,
+    SCRIPT_FAIL_PATTERNS,
+    SCRIPT_LABEL_CHECK_PATTERNS,
     WORKFLOW_RUN_ARTIFACT_DOWNLOAD_PATTERNS,
     WORKFLOW_RUN_DANGEROUS_REF_PATTERNS,
     WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS,
     WORKFLOW_RUN_INJECTABLE_CONTEXTS,
+    WORKFLOW_RUN_REPO_VALIDATION_PATTERNS,
     WRITE_ACCESS_PATTERNS,
 )
 
@@ -46,6 +51,43 @@ def _has_trigger(workflow: dict, trigger_name: str) -> bool:
     if isinstance(on_section, str):
         return on_section == trigger_name
 
+    return False
+
+
+def _get_workflow_run_triggers(workflow: dict) -> list[str]:
+    """Extract the list of workflow names that can trigger a workflow_run.
+
+    Returns a list of workflow names, or empty list if not a workflow_run trigger.
+    """
+    on_section = workflow.get("on") or workflow.get(True)
+    if not isinstance(on_section, dict):
+        return []
+
+    workflow_run_config = on_section.get("workflow_run", {})
+    if not isinstance(workflow_run_config, dict):
+        return []
+
+    workflows = workflow_run_config.get("workflows", [])
+    if isinstance(workflows, str):
+        workflows = [workflows]
+    return [str(w) for w in workflows] if isinstance(workflows, list) else []
+
+
+def _has_safe_dispatch_fallback(ref_value: str) -> bool:
+    """Check if a ref value has a safe fallback from workflow_dispatch inputs.
+
+    Pattern like: inputs.tag || github.event.workflow_run.head_sha
+    The inputs.* part requires write access (workflow_dispatch), making the
+    workflow_run path less likely to be the primary attack vector.
+    """
+    if not ref_value or "||" not in ref_value:
+        return False
+
+    ref_str = str(ref_value)
+    for pattern in SAFE_WORKFLOW_DISPATCH_REF_PATTERNS:
+        match = re.search(pattern, ref_str)
+        if match and ref_str.find("||") > match.end():
+            return True
     return False
 
 
@@ -192,6 +234,35 @@ class BaseDetector(ABC):
                 if self._is_positive_label_gate(dep_if):
                     return True, f"Dependency '{need}' requires label: {dep_if[:60]}"
 
+        # Check for label gating in github-script steps (current job + dependencies)
+        jobs_to_check: list[tuple[str, dict]] = [("", job)]
+        for need in needs:
+            dep_job = jobs.get(need, {})
+            if isinstance(dep_job, dict):
+                jobs_to_check.append((need, dep_job))
+
+        for job_label, check_job in jobs_to_check:
+            steps = check_job.get("steps", [])
+            if not isinstance(steps, list):
+                continue
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                uses = step.get("uses", "")
+                if "github-script" not in str(uses):
+                    continue
+                with_block = step.get("with", {})
+                script = str(with_block.get("script", ""))
+                has_label_check = any(re.search(p, script) for p in SCRIPT_LABEL_CHECK_PATTERNS)
+                has_fail = any(re.search(p, script) for p in SCRIPT_FAIL_PATTERNS)
+                if has_label_check and has_fail:
+                    detail = (
+                        f"Dependency '{job_label}' checks labels via github-script"
+                        if job_label
+                        else "Step checks labels via github-script and fails if missing"
+                    )
+                    return True, detail
+
         return False, ""
 
     def _check_job_same_repo_gating(self, job: dict, workflow: dict) -> tuple[bool, str]:
@@ -273,13 +344,13 @@ class BaseDetector(ABC):
         return False, ""
 
     def _check_job_actor_gating(self, job: dict, workflow: dict) -> tuple[bool, str]:
-        """Check if a job only runs for specific bot actors."""
+        """Check if a job only runs for specific actors (bots or named users)."""
         jobs = workflow.get("jobs", {})
 
         if_condition = str(job.get("if", ""))
         for pattern in ACTOR_GATING_PATTERNS:
             if re.search(pattern, if_condition, re.IGNORECASE):
-                return True, f"Job only runs for bot actor: {if_condition[:80]}"
+                return True, f"Job only runs for specific actor: {if_condition[:80]}"
 
         needs = job.get("needs", [])
         if isinstance(needs, str):
@@ -291,7 +362,7 @@ class BaseDetector(ABC):
                 dep_if = str(dep_job.get("if", ""))
                 for pattern in ACTOR_GATING_PATTERNS:
                     if re.search(pattern, dep_if, re.IGNORECASE):
-                        return True, f"Dependency '{need}' only runs for bot actor"
+                        return True, f"Dependency '{need}' only runs for specific actor"
 
         return False, ""
 
@@ -315,6 +386,38 @@ class BaseDetector(ABC):
                 for pattern in MERGED_PR_PATTERNS:
                     if re.search(pattern, dep_if, re.IGNORECASE):
                         return True, f"Dependency '{need}' only runs on merged PRs"
+
+        return False, ""
+
+    def _check_workflow_run_repo_validation(self, job: dict, workflow: dict) -> tuple[bool, str]:
+        """Check if a workflow_run job validates the triggering repository.
+
+        Some workflow_run workflows validate that the triggering workflow came from
+        the same repository (not a fork) by passing head_repository.full_name into
+        an env variable and comparing it against github.repository. This is
+        equivalent to same_repo gating.
+
+        We only match when the pattern appears in a step's env: block (indicating
+        it's being captured for comparison), NOT when it appears directly in a
+        run: block (where it may just be logged/echoed without validation).
+        """
+        if not _has_trigger(workflow, "workflow_run"):
+            return False, ""
+
+        steps = job.get("steps", [])
+        if not isinstance(steps, list):
+            return False, ""
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            env = step.get("env", {})
+            if isinstance(env, dict):
+                for val in env.values():
+                    val_str = str(val)
+                    for pattern in WORKFLOW_RUN_REPO_VALIDATION_PATTERNS:
+                        if re.search(pattern, val_str, re.IGNORECASE):
+                            return True, "Job validates workflow_run source repository"
 
         return False, ""
 
@@ -348,6 +451,11 @@ class BaseDetector(ABC):
         is_merged_gated, merged_reason = self._check_job_merged_pr_gating(job, workflow)
         if is_merged_gated:
             return "merged", merged_reason
+
+        # Check for workflow_run repository validation (step-level same_repo check)
+        is_repo_validated, repo_reason = self._check_workflow_run_repo_validation(job, workflow)
+        if is_repo_validated:
+            return "same_repo", repo_reason
 
         # Check for both same-repo and label gating
         is_same_repo, same_repo_reason = self._check_job_same_repo_gating(job, workflow)
@@ -556,6 +664,9 @@ class WorkflowRunDetector(BaseDetector):
         if not _has_trigger(workflow, "workflow_run"):
             return []
 
+        # Extract triggering workflow names for context
+        triggering_workflows = _get_workflow_run_triggers(workflow)
+
         jobs = workflow.get("jobs", {})
         if not isinstance(jobs, dict):
             return []
@@ -574,6 +685,25 @@ class WorkflowRunDetector(BaseDetector):
 
             checkout_index, checkout_ref = checkout_result
 
+            # Check if ref has a safe workflow_dispatch fallback
+            # Pattern: inputs.tag || github.event.workflow_run.head_sha
+            # The inputs.* requires write access, reducing exploitability
+            if _has_safe_dispatch_fallback(checkout_ref):
+                protection = ProtectionLevel.DISPATCH_FALLBACK.value
+                triggered_by = ", ".join(triggering_workflows) or "unknown"
+                protection_detail = (
+                    f"Ref has workflow_dispatch input fallback (requires write access). "
+                    f"Triggered by: {triggered_by}"
+                )
+            else:
+                protection, protection_detail = self._analyze_protection(workflow, job_name)
+                if triggering_workflows:
+                    triggered_by = ", ".join(triggering_workflows)
+                    if protection_detail:
+                        protection_detail = f"{protection_detail}; triggered by: {triggered_by}"
+                    else:
+                        protection_detail = f"Triggered by: {triggered_by}"
+
             exec_result = self._find_dangerous_exec(steps, checkout_index)
             if not exec_result:
                 continue
@@ -583,8 +713,6 @@ class WorkflowRunDetector(BaseDetector):
             checkout_line = _get_line_number(content, job_name, checkout_index)
             exec_line = _get_line_number(content, job_name, exec_index)
             _org, _repo, branch = extract_org_repo_branch_from_path(str(workflow_path))
-
-            protection, protection_detail = self._analyze_protection(workflow, job_name)
 
             vulnerabilities.append(
                 VulnerableJob(
@@ -600,6 +728,7 @@ class WorkflowRunDetector(BaseDetector):
                     protection=protection,
                     protection_detail=protection_detail,
                     vulnerability_type=VulnerabilityType.WORKFLOW_RUN.value,
+                    triggering_workflows=triggering_workflows,
                 )
             )
 
@@ -849,6 +978,9 @@ class ArtifactInjectionDetector(BaseDetector):
         if not _has_trigger(workflow, "workflow_run"):
             return []
 
+        # Extract triggering workflow names for context
+        triggering_workflows = _get_workflow_run_triggers(workflow)
+
         jobs = workflow.get("jobs", {})
         if not isinstance(jobs, dict):
             return []
@@ -871,12 +1003,27 @@ class ArtifactInjectionDetector(BaseDetector):
             if not artifact_read_result:
                 continue
 
-            read_index, read_pattern = artifact_read_result
+            read_index, read_pattern, is_safe_extraction = artifact_read_result
 
             download_line = _get_line_number(content, job_name, artifact_download_index)
             read_line = _get_line_number(content, job_name, read_index)
-            protection, protection_detail = self._analyze_protection(workflow, job_name)
             _org, _repo, branch = extract_org_repo_branch_from_path(str(workflow_path))
+
+            # Check if the extraction uses safe patterns (jq with proper quoting)
+            if is_safe_extraction:
+                protection = ProtectionLevel.SAFE_USAGE.value
+                triggered_by = ", ".join(triggering_workflows) or "unknown"
+                protection_detail = (
+                    f"Uses jq for safe JSON extraction. Triggered by: {triggered_by}"
+                )
+            else:
+                protection, protection_detail = self._analyze_protection(workflow, job_name)
+                if triggering_workflows:
+                    triggered_by = ", ".join(triggering_workflows)
+                    if protection_detail:
+                        protection_detail = f"{protection_detail}; triggered by: {triggered_by}"
+                    else:
+                        protection_detail = f"Triggered by: {triggered_by}"
 
             vulnerabilities.append(
                 VulnerableJob(
@@ -892,6 +1039,7 @@ class ArtifactInjectionDetector(BaseDetector):
                     protection=protection,
                     protection_detail=protection_detail,
                     vulnerability_type=VulnerabilityType.ARTIFACT_INJECTION.value,
+                    triggering_workflows=triggering_workflows,
                 )
             )
 
@@ -922,10 +1070,11 @@ class ArtifactInjectionDetector(BaseDetector):
 
         return None
 
-    def _find_artifact_read(self, steps: list, download_index: int) -> tuple[int, str] | None:
+    def _find_artifact_read(self, steps: list, download_index: int) -> tuple[int, str, bool] | None:
         """Find a step after download that reads artifact content.
 
-        Returns (step_index, matched_pattern) or None.
+        Returns (step_index, matched_pattern, is_safe_extraction) or None.
+        is_safe_extraction is True if the data is extracted via jq (safe JSON parsing).
         """
         for i, step in enumerate(steps):
             if i <= download_index:
@@ -939,10 +1088,19 @@ class ArtifactInjectionDetector(BaseDetector):
                 continue
 
             run_str = str(run_block)
+
+            # First check for safe extraction patterns (jq)
+            # jq extracts JSON values safely - no command injection in the value itself
+            for safe_pattern in SAFE_ARTIFACT_EXTRACTION_PATTERNS:
+                match = re.search(safe_pattern, run_str)
+                if match:
+                    return (i, match.group(0), True)
+
+            # Then check for unsafe patterns
             for pattern in ARTIFACT_READ_PATTERNS:
                 match = re.search(pattern, run_str)
                 if match:
-                    return (i, match.group(0))
+                    return (i, match.group(0), False)
 
         return None
 

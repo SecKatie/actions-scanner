@@ -84,7 +84,28 @@ class TestPwnRequestDetector:
         assert len(vulns) > 0
         vuln = vulns[0]
         assert vuln.protection == "actor"
-        assert "bot actor" in vuln.protection_detail.lower()
+        assert "specific actor" in vuln.protection_detail.lower()
+        assert not vuln.is_exploitable()
+
+    def test_detect_sender_login_gated_workflow(
+        self,
+        sender_login_gated_workflow_path: Path,
+    ) -> None:
+        """Test detection of sender.login-gated workflow.
+
+        Regression test: workflows gated by github.event.sender.login should be
+        detected as actor-gated, not reported as exploitable.
+        """
+        from actions_scanner.core.detector import ContextInjectionDetector
+
+        detector = ContextInjectionDetector()
+        vulns = detector.analyze_workflow(sender_login_gated_workflow_path)
+
+        # Should detect the context injection, but mark as actor-gated
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.protection == "actor"
+        assert "specific actor" in vuln.protection_detail.lower()
         assert not vuln.is_exploitable()
 
     def test_detect_merged_pr_gated_workflow(
@@ -119,6 +140,22 @@ class TestPwnRequestDetector:
         vulns = detector.analyze_workflow(label_gated_workflow_path)
 
         # Should detect the pattern, marked as label-gated (exploitable via social engineering)
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.protection == "label"
+        assert vuln.is_exploitable()  # Label-gated is still exploitable
+
+    def test_detect_label_gated_github_script_workflow(
+        self,
+        detector: PwnRequestDetector,
+        label_gated_github_script_workflow_path: Path,
+    ) -> None:
+        """Test detection of label gating via github-script step.
+
+        Regression test for openshift/linuxptp-daemon aws-ci.yaml pattern.
+        """
+        vulns = detector.analyze_workflow(label_gated_github_script_workflow_path)
+
         assert len(vulns) > 0
         vuln = vulns[0]
         assert vuln.protection == "label"
@@ -359,6 +396,32 @@ class TestWorkflowRunDetector:
         )
         assert vuln.vulnerability_type == "workflow_run"
         assert vuln.to_dict()["vulnerability_type"] == "workflow_run"
+
+
+class TestWorkflowRunRepoValidation:
+    """Tests for workflow_run repository validation detection."""
+
+    @pytest.fixture
+    def detector(self) -> WorkflowRunDetector:
+        """Create a detector instance."""
+        return WorkflowRunDetector()
+
+    def test_detect_workflow_run_repo_validation(
+        self, detector: WorkflowRunDetector, workflow_run_repo_validated_path: Path
+    ) -> None:
+        """Test detection of workflow_run with step-level repo validation.
+
+        Regression test: workflow_run workflows that validate
+        head_repository.full_name against github.repository should be
+        detected as same_repo-gated (not exploitable from forks).
+        """
+        vulns = detector.analyze_workflow(workflow_run_repo_validated_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.protection == "same_repo"
+        assert "validates" in vuln.protection_detail.lower()
+        assert not vuln.is_exploitable()
 
 
 class TestContextInjectionDetector:

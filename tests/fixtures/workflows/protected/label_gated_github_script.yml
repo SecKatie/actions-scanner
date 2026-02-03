@@ -1,0 +1,28 @@
+name: Label-gated via github-script
+on:
+  pull_request_target:
+    types: [labeled, synchronize]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check ok-to-test label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = "ok-to-test";
+            const pr = context.payload.pull_request;
+            const labels = pr.labels.map(l => l.name);
+            if (!labels.includes(label)) {
+              core.setFailed(`Missing required '${label}' label. PR is not ok to test.`);
+              return;
+            }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build
+        run: make build

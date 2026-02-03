@@ -138,6 +138,25 @@ LABEL_REQUIRED_PATTERNS = [
     r"github\.event\.action\s*==\s*['\"]labeled['\"]",
 ]
 
+# Patterns for label checking inside github-script steps
+# These indicate the script is inspecting PR labels
+SCRIPT_LABEL_CHECK_PATTERNS = [
+    r"\.labels",
+    r"labels\.includes\b",
+    r"labels\.map\b",
+    r"labels\.find\b",
+    r"labels\.some\b",
+    r"labels\.filter\b",
+]
+
+# Patterns for script failure/halt that confirm gating behavior
+# Without these, a label check might just be informational
+SCRIPT_FAIL_PATTERNS = [
+    r"core\.setFailed\b",
+    r"process\.exit\b",
+    r"throw\s+new\s+Error",
+]
+
 # Patterns for same-repo checks (not from fork)
 SAME_REPO_PATTERNS = [
     r"github\.event\.pull_request\.head\.repo\.full_name\s*==",
@@ -153,13 +172,15 @@ AUTHORIZATION_JOB_PATTERNS = [
     "check",
 ]
 
-# Patterns for actor-gating (only bot can trigger)
-# When a workflow requires the actor to be a specific bot, external attackers cannot trigger it
+# Patterns for actor-gating (only specific actor can trigger)
+# When a workflow requires the actor to be a specific bot or user, external attackers cannot trigger it
 ACTOR_GATING_PATTERNS = [
     r"github\.actor\s*==\s*['\"][^'\"]+\[bot\]['\"]",  # github.actor == 'dependabot[bot]'
     r"github\.actor\s*==\s*['\"]dependabot\[bot\]['\"]",
     r"github\.actor\s*==\s*['\"]renovate\[bot\]['\"]",
     r"github\.actor\s*==\s*['\"]github-actions\[bot\]['\"]",
+    # sender.login checks (equivalent to github.actor for PR events)
+    r"github\.event\.sender\.login\s*==\s*['\"][^'\"]+['\"]",
 ]
 
 # Patterns for merged-PR gating (only runs after PR is merged/reviewed)
@@ -271,6 +292,13 @@ ISSUE_COMMENT_PR_PATTERNS = [
     r"github\.event\.issue\.pull_request",  # Check if issue is a PR
 ]
 
+# Patterns for workflow_run repository validation in run blocks
+# When a workflow_run job validates that the triggering repo matches the current repo,
+# it rejects fork triggers (equivalent to same_repo gating)
+WORKFLOW_RUN_REPO_VALIDATION_PATTERNS = [
+    r"github\.event\.workflow_run\.head_repository\.full_name",
+]
+
 # Patterns for reading file content into shell variables or commands
 # These patterns indicate artifact content being used unsafely in shell commands
 ARTIFACT_READ_PATTERNS = [
@@ -281,4 +309,16 @@ ARTIFACT_READ_PATTERNS = [
     r"source\s+\S+",  # source file - sourcing a file (require path)
     r"^\s*\.\s+[\./$]",  # . file - dot sourcing at line start with path (./file, /file, $var)
     r"[;&|]\s*\.\s+[\./$]",  # . file - dot sourcing after separator with path
+]
+
+# Patterns for SAFE artifact data extraction
+# When data is extracted via jq and used with proper quoting, command injection is prevented
+SAFE_ARTIFACT_EXTRACTION_PATTERNS = [
+    r"\$\(jq\s+(-r\s+)?['\"]",  # $(jq -r '.field' file) or $(jq '.field' file)
+]
+
+# Patterns indicating ref comes from safe sources (manual dispatch input)
+# inputs.* comes from workflow_dispatch which requires repo write access to trigger
+SAFE_WORKFLOW_DISPATCH_REF_PATTERNS = [
+    r"inputs\.[a-zA-Z_][a-zA-Z0-9_]*",  # ${{ inputs.tag }} - from workflow_dispatch
 ]

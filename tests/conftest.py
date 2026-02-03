@@ -215,3 +215,33 @@ def safe_user_login_issue_comment_path(workflows_dir: Path) -> Path:
     GitHub usernames are constrained to [a-zA-Z0-9-] and cannot contain shell metacharacters.
     """
     return workflows_dir / "safe" / "context_injection_safe_comment_user_login.yml"
+
+
+@pytest.fixture
+def sender_login_gated_workflow_path(workflows_dir: Path) -> Path:
+    """Return path to a sender.login-gated workflow.
+
+    Regression test: workflows gated by github.event.sender.login should be
+    detected as actor-gated (not exploitable by arbitrary attackers).
+    """
+    return workflows_dir / "protected" / "sender_login_gated.yml"
+
+
+@pytest.fixture
+def workflow_run_repo_validated_path(workflows_dir: Path) -> Path:
+    """Return path to a workflow_run workflow with step-level repo validation.
+
+    Regression test: workflow_run workflows that validate head_repository.full_name
+    against github.repository should be detected as same_repo-gated.
+    """
+    return workflows_dir / "protected" / "workflow_run_repo_validated.yml"
+
+
+@pytest.fixture
+def label_gated_github_script_workflow_path(workflows_dir: Path) -> Path:
+    """Return path to a label-gated-via-github-script workflow.
+
+    Regression test: openshift/linuxptp-daemon aws-ci.yaml pattern where
+    label gating is done inside a github-script step using core.setFailed().
+    """
+    return workflows_dir / "protected" / "label_gated_github_script.yml"

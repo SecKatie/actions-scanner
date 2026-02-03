@@ -14,6 +14,10 @@ class ProtectionLevel(str, Enum):
     SAME_REPO = "same_repo"  # Only runs for PRs from same repo (not forks)
     ACTOR = "actor"  # Only runs for specific bot actors (not exploitable by external)
     MERGED = "merged"  # Only runs on merged PRs (code already reviewed)
+    SAFE_USAGE = "safe_usage"  # Artifact data extracted/used safely (jq, quoted vars, heredoc)
+    DISPATCH_FALLBACK = (
+        "dispatch_fallback"  # Ref has workflow_dispatch input fallback (requires write)
+    )
 
 
 class VulnerabilityType(str, Enum):
@@ -49,6 +53,9 @@ class VulnerableJob:
     protection: str = "none"  # none, label, permission, same_repo
     protection_detail: str = ""  # Description of the protection
     vulnerability_type: str = VulnerabilityType.PWNREQUEST.value  # pwnrequest or workflow_run
+    triggering_workflows: list[str] = field(
+        default_factory=list
+    )  # For workflow_run: upstream workflows
 
     def is_exploitable(self) -> bool:
         """Return True if this vulnerability can be exploited by external attackers."""
@@ -56,7 +63,7 @@ class VulnerableJob:
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
-        return {
+        result = {
             "vulnerability_type": self.vulnerability_type,
             "workflow_path": str(self.workflow_path),
             "job_name": self.job_name,
@@ -70,6 +77,10 @@ class VulnerableJob:
             "protection": self.protection,
             "protection_detail": self.protection_detail,
         }
+        # Only include triggering_workflows if non-empty (for workflow_run types)
+        if self.triggering_workflows:
+            result["triggering_workflows"] = self.triggering_workflows
+        return result
 
 
 @dataclass
@@ -88,14 +99,7 @@ class ScanResult:
     @property
     def counts_by_protection(self) -> dict[str, int]:
         """Count vulnerabilities by protection level."""
-        counts: dict[str, int] = {
-            ProtectionLevel.NONE.value: 0,
-            ProtectionLevel.LABEL.value: 0,
-            ProtectionLevel.PERMISSION.value: 0,
-            ProtectionLevel.SAME_REPO.value: 0,
-            ProtectionLevel.ACTOR.value: 0,
-            ProtectionLevel.MERGED.value: 0,
-        }
+        counts: dict[str, int] = {level.value: 0 for level in ProtectionLevel}
         for v in self.vulnerabilities:
             counts[v.protection] = counts.get(v.protection, 0) + 1
         return counts

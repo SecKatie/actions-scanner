@@ -1,0 +1,31 @@
+name: Workflow run with repo validation
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types:
+      - completed
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Validate workflow_run repository
+        env:
+          WORKFLOW_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          EXPECTED_REPO: ${{ github.repository }}
+        run: |
+          if [ "${WORKFLOW_REPO}" != "${EXPECTED_REPO}" ]; then
+            echo "ERROR: workflow_run triggered from untrusted repository!"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Run build
+        run: make build
