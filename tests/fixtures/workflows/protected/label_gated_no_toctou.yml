@@ -1,0 +1,17 @@
+name: Label-gated without TOCTOU
+on:
+  pull_request_target:
+    types: [labeled]  # Only labeled, no synchronize = no TOCTOU
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build
+        run: make build

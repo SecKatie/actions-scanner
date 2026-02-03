@@ -96,10 +96,8 @@ class TestPwnRequestDetector:
         Regression test: workflows gated by github.event.sender.login should be
         detected as actor-gated, not reported as exploitable.
         """
-        from actions_scanner.core.detector import ContextInjectionDetector
-
-        detector = ContextInjectionDetector()
-        vulns = detector.analyze_workflow(sender_login_gated_workflow_path)
+        context_detector = ContextInjectionDetector()
+        vulns = context_detector.analyze_workflow(sender_login_gated_workflow_path)
 
         # Should detect the context injection, but mark as actor-gated
         assert len(vulns) > 0
@@ -145,12 +143,17 @@ class TestPwnRequestDetector:
         assert vuln.protection == "label"
         assert vuln.is_exploitable()  # Label-gated is still exploitable
 
-    def test_detect_label_gated_github_script_workflow(
+    def test_detect_label_gated_github_script_toctou(
         self,
         detector: PwnRequestDetector,
         label_gated_github_script_workflow_path: Path,
     ) -> None:
-        """Test detection of label gating via github-script step.
+        """Test detection of TOCTOU in github-script label gating.
+
+        When a workflow triggers on both 'labeled' AND 'synchronize', the label
+        check can be bypassed: attacker gets benign code labeled, then pushes
+        malicious code. The workflow re-runs due to 'synchronize', label is still
+        present, malicious code executes.
 
         Regression test for openshift/linuxptp-daemon aws-ci.yaml pattern.
         """
@@ -158,8 +161,29 @@ class TestPwnRequestDetector:
 
         assert len(vulns) > 0
         vuln = vulns[0]
+        # TOCTOU detected - label gating is ineffective
+        assert vuln.protection == "none"
+        assert "TOCTOU" in vuln.protection_detail
+        assert "synchronize" in vuln.protection_detail
+        assert vuln.is_exploitable()
+
+    def test_detect_label_gated_no_toctou(
+        self,
+        detector: PwnRequestDetector,
+        label_gated_no_toctou_workflow_path: Path,
+    ) -> None:
+        """Test detection of effective label gating (no TOCTOU).
+
+        When a workflow only triggers on 'labeled' (not 'synchronize'), the label
+        check IS effective because pushing new code won't re-trigger the workflow.
+        """
+        vulns = detector.analyze_workflow(label_gated_no_toctou_workflow_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        # Effective label gating - no TOCTOU
         assert vuln.protection == "label"
-        assert vuln.is_exploitable()  # Label-gated is still exploitable
+        assert vuln.is_exploitable()  # Label-gated is still exploitable via social engineering
 
     def test_detect_local_action_vulnerability(
         self, detector: PwnRequestDetector, local_action_workflow_path: Path

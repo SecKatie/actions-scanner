@@ -239,9 +239,20 @@ def workflow_run_repo_validated_path(workflows_dir: Path) -> Path:
 
 @pytest.fixture
 def label_gated_github_script_workflow_path(workflows_dir: Path) -> Path:
-    """Return path to a label-gated-via-github-script workflow.
+    """Return path to a label-gated-via-github-script workflow with TOCTOU.
 
     Regression test: openshift/linuxptp-daemon aws-ci.yaml pattern where
     label gating is done inside a github-script step using core.setFailed().
+    NOTE: This workflow has TOCTOU because it triggers on 'synchronize'.
     """
     return workflows_dir / "protected" / "label_gated_github_script.yml"
+
+
+@pytest.fixture
+def label_gated_no_toctou_workflow_path(workflows_dir: Path) -> Path:
+    """Return path to a label-gated workflow without TOCTOU.
+
+    This workflow only triggers on 'labeled' (not 'synchronize'), so the label
+    check IS effective - pushing new code won't re-trigger the workflow.
+    """
+    return workflows_dir / "protected" / "label_gated_no_toctou.yml"

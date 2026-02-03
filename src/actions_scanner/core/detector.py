@@ -54,6 +54,55 @@ def _has_trigger(workflow: dict, trigger_name: str) -> bool:
     return False
 
 
+def _trigger_has_type(workflow: dict, trigger_name: str, event_type: str) -> bool:
+    """Check if a trigger has a specific event type (e.g., 'synchronize' for pull_request_target).
+
+    Returns True if:
+    - The trigger has types: [event_type, ...] explicitly listed
+    - The trigger has NO types specified (defaults include the event_type for PR triggers)
+    """
+    # Default types for pull_request_target per GitHub docs
+    pr_target_defaults = ("opened", "synchronize", "reopened")
+
+    def _uses_defaults(trigger: str) -> bool:
+        """Check if event_type is in default types for this trigger."""
+        if trigger == "pull_request_target":
+            return event_type in pr_target_defaults
+        return False
+
+    on_section = workflow.get("on") or workflow.get(True)
+    if on_section is None:
+        return False
+
+    # Simple string trigger: "on: pull_request_target"
+    if isinstance(on_section, str):
+        return on_section == trigger_name and _uses_defaults(trigger_name)
+
+    # List trigger: "on: [pull_request_target, push]"
+    if isinstance(on_section, list):
+        return trigger_name in on_section and _uses_defaults(trigger_name)
+
+    if not isinstance(on_section, dict):
+        return False
+
+    trigger_config = on_section.get(trigger_name)
+    if trigger_config is None:
+        return False
+
+    # Trigger with no config or empty config uses defaults
+    if not trigger_config or not isinstance(trigger_config, dict):
+        return _uses_defaults(trigger_name)
+
+    types = trigger_config.get("types", [])
+    if not types:
+        return _uses_defaults(trigger_name)
+
+    if isinstance(types, str):
+        types = [types]
+
+    return event_type in types
+
+
 def _get_workflow_run_triggers(workflow: dict) -> list[str]:
     """Extract the list of workflow names that can trigger a workflow_run.
 
@@ -428,11 +477,17 @@ class BaseDetector(ABC):
 
         Protection types:
         - "none": Fully exploitable by any PR author
-        - "label": Requires maintainer to add label (social engineering vector)
+        - "label": Requires maintainer to add label (effective only if no TOCTOU)
         - "permission": Requires PR author to have write/admin/maintain access
         - "same_repo": Only runs for PRs from same repo, not forks
         - "actor": Only runs for specific bot actors
         - "merged": Only runs on merged PRs (code already reviewed)
+
+        TOCTOU (Time-of-Check Time-of-Use) issue:
+        If a workflow triggers on both 'labeled' AND 'synchronize', the label check
+        can be bypassed: attacker gets benign code labeled, then pushes malicious code.
+        The workflow re-runs due to 'synchronize', label is still present, malicious
+        code executes. In this case, label gating provides NO real protection.
         """
         jobs = workflow.get("jobs", {})
         job = jobs.get(job_name, {})
@@ -461,28 +516,40 @@ class BaseDetector(ABC):
         is_same_repo, same_repo_reason = self._check_job_same_repo_gating(job, workflow)
         is_label_gated, label_reason = self._check_job_label_gating(job, workflow)
 
-        # If both same-repo AND label checks exist in an OR condition,
-        # the protection is only as strong as the weaker one (label-gated)
-        if is_same_repo and is_label_gated:
-            if_condition = str(job.get("if", ""))
-            needs = job.get("needs", [])
-            if isinstance(needs, str):
-                needs = [needs]
-            for need in needs:
-                dep_job = jobs.get(need, {})
-                if isinstance(dep_job, dict):
-                    if_condition += " " + str(dep_job.get("if", ""))
-
-            if "||" in if_condition:
-                return "label", f"OR condition: {label_reason}"
-
-        if is_same_repo:
+        # If same-repo only (no label gating), it's effective protection
+        if is_same_repo and not is_label_gated:
             return "same_repo", same_repo_reason
 
+        # If both same-repo AND label checks exist, check for OR condition
+        # An OR weakens protection to the weaker option (label-gated)
+        if is_same_repo and is_label_gated:
+            if_condition = self._collect_job_conditions(job, jobs)
+            if "||" in if_condition:
+                label_reason = f"OR condition: {label_reason}"
+
         if is_label_gated:
+            # TOCTOU check: if workflow triggers on 'synchronize', label gating is ineffective
+            # Attacker can: get label on benign code -> push malicious code -> workflow re-runs
+            if _trigger_has_type(workflow, "pull_request_target", "synchronize"):
+                return (
+                    "none",
+                    f"TOCTOU: {label_reason} (triggers on synchronize, bypasses label check)",
+                )
             return "label", label_reason
 
         return "none", ""
+
+    def _collect_job_conditions(self, job: dict, jobs: dict) -> str:
+        """Collect all if conditions from a job and its dependencies."""
+        conditions = [str(job.get("if", ""))]
+        needs = job.get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        for need in needs:
+            dep_job = jobs.get(need, {})
+            if isinstance(dep_job, dict):
+                conditions.append(str(dep_job.get("if", "")))
+        return " ".join(conditions)
 
 
 class PwnRequestDetector(BaseDetector):
