@@ -124,3 +124,11 @@ exclude_lines = [
     "@abstractmethod",
 ]
 show_missing = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.14.13",
+    "ty>=0.0.12",
+]
