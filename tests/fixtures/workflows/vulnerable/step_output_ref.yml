@@ -1,0 +1,43 @@
+name: Indirect Ref via Step Output
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-prerequisites:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check prerequisites
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      run: |
+        USER_PERM=$(gh api "/repos/${{ github.repository }}/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo "none")
+        if [[ "$USER_PERM" =~ ^(admin|write|maintain)$ ]]; then
+          echo "Allowed."
+          exit 0
+        fi
+        exit 1
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [check-prerequisites]
+    steps:
+      - name: Set checkout ref
+        id: set-ref
+        run: |
+          case "${{ github.event_name }}" in
+            repository_dispatch) ref=$(jq -r '.client_payload.head_sha' $GITHUB_EVENT_PATH) ;;
+            merge_group)        ref=$(jq -r '.merge_group.head_sha' $GITHUB_EVENT_PATH) ;;
+            *)                  ref=$(jq -r '.pull_request.head.sha' $GITHUB_EVENT_PATH) ;;
+          esac
+          echo "ref=$ref" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.set-ref.outputs.ref }}
+
+      - name: Build and test
+        run: make test

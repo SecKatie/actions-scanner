@@ -249,6 +249,17 @@ def label_gated_github_script_workflow_path(workflows_dir: Path) -> Path:
 
 
 @pytest.fixture
+def step_output_ref_workflow_path(workflows_dir: Path) -> Path:
+    """Return path to a vulnerable workflow with indirect ref via step output.
+
+    Regression test: konflux-ci/konflux-ci pattern where the checkout ref is
+    steps.<id>.outputs.<name>, and that step reads pull_request.head.sha from
+    $GITHUB_EVENT_PATH and writes it to $GITHUB_OUTPUT.
+    """
+    return workflows_dir / "vulnerable" / "step_output_ref.yml"
+
+
+@pytest.fixture
 def label_gated_no_toctou_workflow_path(workflows_dir: Path) -> Path:
     """Return path to a label-gated workflow without TOCTOU.
 

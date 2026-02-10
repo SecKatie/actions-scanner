@@ -14,6 +14,7 @@ from .patterns import (
     ARTIFACT_READ_PATTERNS,
     AUTHORIZATION_JOB_PATTERNS,
     DANGEROUS_COMMANDS,
+    DANGEROUS_EVENT_PATH_REF_PATTERNS,
     DANGEROUS_GIT_CHECKOUT_PATTERNS,
     DANGEROUS_REF_PATTERNS,
     DANGEROUS_REPO_PATTERNS,
@@ -31,6 +32,7 @@ from .patterns import (
     SAME_REPO_PATTERNS,
     SCRIPT_FAIL_PATTERNS,
     SCRIPT_LABEL_CHECK_PATTERNS,
+    STEP_OUTPUT_REF_PATTERN,
     WORKFLOW_RUN_ARTIFACT_DOWNLOAD_PATTERNS,
     WORKFLOW_RUN_DANGEROUS_REF_PATTERNS,
     WORKFLOW_RUN_GIT_CHECKOUT_PATTERNS,
@@ -632,11 +634,49 @@ class PwnRequestDetector(BaseDetector):
         ref_str = str(ref_value)
         return any(re.search(pattern, ref_str) for pattern in DANGEROUS_REF_PATTERNS)
 
+    def _resolve_step_output_ref(self, ref_value: str, steps: list) -> str | None:
+        """Resolve a step output reference to its underlying dangerous ref.
+
+        When a checkout ref uses steps.<id>.outputs.<name>, trace back to the
+        step with that id and check if its run: block reads a dangerous PR ref
+        from $GITHUB_EVENT_PATH and writes it to $GITHUB_OUTPUT.
+
+        Returns the matched dangerous pattern string, or None if safe.
+        """
+        ref_str = str(ref_value)
+        match = re.search(STEP_OUTPUT_REF_PATTERN, ref_str)
+        if not match:
+            return None
+
+        step_id = match.group(1)
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("id", "")) != step_id:
+                continue
+
+            run_block = str(step.get("run", ""))
+            if not run_block:
+                continue
+
+            # The step must write to $GITHUB_OUTPUT
+            if "GITHUB_OUTPUT" not in run_block:
+                continue
+
+            # Check if the run block reads a dangerous PR ref
+            for pattern in DANGEROUS_EVENT_PATH_REF_PATTERNS:
+                if re.search(pattern, run_block):
+                    return re.search(pattern, run_block).group(0)  # type: ignore[union-attr]
+
+        return None
+
     def _find_dangerous_checkout(self, steps: list) -> tuple[int, str] | None:
         """Find a dangerous checkout step in a list of steps.
 
         Returns (step_index, ref_value) or None.
         Checks both actions/checkout refs and git commands that checkout PR code.
+        Also resolves indirect refs via step outputs (steps.<id>.outputs.<name>).
         """
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
@@ -649,6 +689,11 @@ class PwnRequestDetector(BaseDetector):
                     ref = with_block.get("ref", "")
                     if self._is_dangerous_ref(ref):
                         return (i, str(ref))
+
+                    # Check for indirect ref via step output
+                    resolved = self._resolve_step_output_ref(ref, steps)
+                    if resolved:
+                        return (i, f"{ref} (via {resolved})")
 
                     repo_value = with_block.get("repository", "")
                     if repo_value:

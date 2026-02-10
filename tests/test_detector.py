@@ -239,6 +239,25 @@ class TestPwnRequestDetector:
         assert "pip" in vuln.exec_value
         assert vuln.is_exploitable()
 
+    def test_detect_step_output_ref_vulnerability(
+        self, detector: PwnRequestDetector, step_output_ref_workflow_path: Path
+    ) -> None:
+        """Test detection of indirect ref via step output.
+
+        Regression test for konflux-ci/konflux-ci pattern where checkout ref
+        is steps.<id>.outputs.<name>, and the referenced step reads
+        pull_request.head.sha from $GITHUB_EVENT_PATH.
+        """
+        vulns = detector.analyze_workflow(step_output_ref_workflow_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.job_name == "test"
+        assert "steps.set-ref.outputs.ref" in vuln.checkout_ref
+        assert "pull_request.head.sha" in vuln.checkout_ref
+        assert vuln.exec_type == "build_command"
+        assert vuln.is_exploitable()
+
     def test_safe_base_branch_checkout(
         self, detector: PwnRequestDetector, base_branch_checkout_workflow_path: Path
     ) -> None:

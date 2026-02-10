@@ -98,6 +98,17 @@ DANGEROUS_COMMANDS = [
     r"^\s*lein\s",
 ]
 
+# Pattern to extract step id from steps.<id>.outputs.<name> references
+STEP_OUTPUT_REF_PATTERN = r"steps\.([a-zA-Z_][a-zA-Z0-9_-]*)\.outputs\."
+
+# Patterns for dangerous PR refs read from $GITHUB_EVENT_PATH in run blocks
+# When a step reads these fields via jq/shell and writes to $GITHUB_OUTPUT,
+# the resulting step output is an indirect dangerous ref
+DANGEROUS_EVENT_PATH_REF_PATTERNS = [
+    r"\.pull_request\.head\.sha",
+    r"\.pull_request\.head\.ref",
+]
+
 # Patterns for dangerous git commands that checkout PR code in run steps
 # These patterns indicate checking out untrusted PR code via git commands
 DANGEROUS_GIT_CHECKOUT_PATTERNS = [
