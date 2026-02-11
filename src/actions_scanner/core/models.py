@@ -14,6 +14,7 @@ class ProtectionLevel(str, Enum):
     SAME_REPO = "same_repo"  # Only runs for PRs from same repo (not forks)
     ACTOR = "actor"  # Only runs for specific bot actors (not exploitable by external)
     MERGED = "merged"  # Only runs on merged PRs (code already reviewed)
+    ENVIRONMENT = "environment"  # Job uses GitHub environment with deployment protection rules
     SAFE_USAGE = "safe_usage"  # Artifact data extracted/used safely (jq, quoted vars, heredoc)
     DISPATCH_FALLBACK = (
         "dispatch_fallback"  # Ref has workflow_dispatch input fallback (requires write)

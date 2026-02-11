@@ -260,6 +260,12 @@ def step_output_ref_workflow_path(workflows_dir: Path) -> Path:
 
 
 @pytest.fixture
+def environment_gated_workflow_path(workflows_dir: Path) -> Path:
+    """Return path to an environment-gated workflow."""
+    return workflows_dir / "protected" / "environment_gated.yml"
+
+
+@pytest.fixture
 def label_gated_no_toctou_workflow_path(workflows_dir: Path) -> Path:
     """Return path to a label-gated workflow without TOCTOU.
 

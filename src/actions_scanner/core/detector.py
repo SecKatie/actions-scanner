@@ -514,6 +514,16 @@ class BaseDetector(ABC):
         if is_repo_validated:
             return "same_repo", repo_reason
 
+        # Check for GitHub environment protection
+        environment = job.get("environment")
+        if environment:
+            env_name = environment if isinstance(environment, str) else environment.get("name", "")
+            if env_name:
+                return (
+                    "environment",
+                    f"Job uses GitHub environment '{env_name}' (may have deployment protection rules)",
+                )
+
         # Check for both same-repo and label gating
         is_same_repo, same_repo_reason = self._check_job_same_repo_gating(job, workflow)
         is_label_gated, label_reason = self._check_job_label_gating(job, workflow)

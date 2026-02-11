@@ -1,0 +1,16 @@
+name: Environment-gated workflow
+on:
+  pull_request_target:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    environment: CI
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run tests
+        run: make test

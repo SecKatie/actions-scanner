@@ -32,7 +32,11 @@ def generate_markdown_report(
 
     # Separate exploitable from protected
     exploitable = by_protection.get("none", []) + by_protection.get("label", [])
-    protected = by_protection.get("permission", []) + by_protection.get("same_repo", [])
+    protected = (
+        by_protection.get("permission", [])
+        + by_protection.get("same_repo", [])
+        + by_protection.get("environment", [])
+    )
 
     with output_path.open("w", encoding="utf-8") as f:
         # Header
@@ -46,6 +50,9 @@ def generate_markdown_report(
         f.write(f"- **Label-gated (social eng.):** {len(by_protection.get('label', []))}\n")
         f.write(f"- **Permission-gated (filtered):** {len(by_protection.get('permission', []))}\n")
         f.write(f"- **Same-repo only (filtered):** {len(by_protection.get('same_repo', []))}\n")
+        f.write(
+            f"- **Environment-gated (filtered):** {len(by_protection.get('environment', []))}\n"
+        )
         f.write("\n")
 
         if not vulnerabilities:
@@ -113,9 +120,12 @@ def generate_markdown_report(
                 f.write(f"### {repo_name}\n\n")
 
                 for v in repo_vulns:
-                    protection_label = (
-                        "PERMISSION-GATED" if v.protection == "permission" else "SAME-REPO-ONLY"
-                    )
+                    if v.protection == "permission":
+                        protection_label = "PERMISSION-GATED"
+                    elif v.protection == "environment":
+                        protection_label = "ENVIRONMENT-GATED"
+                    else:
+                        protection_label = "SAME-REPO-ONLY"
                     f.write(f"- **[{protection_label}]** Job: `{v.job_name}`\n")
                     f.write(f"  - {v.protection_detail}\n")
                     f.write("\n")
@@ -173,6 +183,7 @@ def generate_summary_report(
         f.write(f"| Label-gated | {len(by_protection.get('label', []))} |\n")
         f.write(f"| Permission-gated | {len(by_protection.get('permission', []))} |\n")
         f.write(f"| Same-repo only | {len(by_protection.get('same_repo', []))} |\n")
+        f.write(f"| Environment-gated | {len(by_protection.get('environment', []))} |\n")
         f.write("\n")
 
         # List exploitable repos

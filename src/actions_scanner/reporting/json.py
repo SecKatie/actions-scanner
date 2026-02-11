@@ -167,6 +167,7 @@ def _count_by_protection(vulnerabilities: list[VulnerableJob]) -> dict[str, int]
         "label": 0,
         "permission": 0,
         "same_repo": 0,
+        "environment": 0,
     }
     for v in vulnerabilities:
         counts[v.protection] = counts.get(v.protection, 0) + 1

@@ -131,6 +131,23 @@ class TestPwnRequestDetector:
         assert vuln.protection == "same_repo"
         assert not vuln.is_exploitable()
 
+    def test_detect_environment_gated_workflow(
+        self, detector: PwnRequestDetector, environment_gated_workflow_path: Path
+    ) -> None:
+        """Test detection of environment-gated workflow.
+
+        Jobs using GitHub environments may have deployment protection rules
+        (required reviewers, wait timers, branch policies) that pause the job
+        before any steps execute, making them non-exploitable.
+        """
+        vulns = detector.analyze_workflow(environment_gated_workflow_path)
+
+        assert len(vulns) > 0
+        vuln = vulns[0]
+        assert vuln.protection == "environment"
+        assert "CI" in vuln.protection_detail
+        assert not vuln.is_exploitable()
+
     def test_detect_label_gated_workflow(
         self, detector: PwnRequestDetector, label_gated_workflow_path: Path
     ) -> None:
@@ -347,6 +364,20 @@ class TestVulnerableJob:
             exec_type="build_command",
             exec_value="npm install",
             protection="merged",
+        )
+        assert not vuln.is_exploitable()
+
+    def test_not_exploitable_environment(self) -> None:
+        """Test that environment-gated vulns are not exploitable."""
+        vuln = VulnerableJob(
+            workflow_path=Path("test.yml"),
+            job_name="test",
+            checkout_line=10,
+            checkout_ref="${{ github.head_ref }}",
+            exec_line=15,
+            exec_type="build_command",
+            exec_value="npm install",
+            protection="environment",
         )
         assert not vuln.is_exploitable()
 
