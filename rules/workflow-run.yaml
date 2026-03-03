@@ -1,0 +1,72 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Workflow Run: Dangerous checkout ref
+  # ---------------------------------------------------------------------------
+  - id: gha-workflow-run-dangerous-checkout-ref
+    message: >-
+      Checkout of attacker-controlled ref ('${{$REF}}') in a workflow_run
+      workflow. The workflow_run trigger runs with base repository privileges.
+      If an attacker's PR triggers the upstream workflow, their commit is
+      checked out and any subsequent build step executes attacker code with
+      write access to the repo and secrets.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: workflow_run
+      references:
+        - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            workflow_run: ...
+          ...
+      - pattern: |
+          uses: actions/checkout@$VER
+          with:
+            ref: $REF
+      - metavariable-regex:
+          metavariable: $REF
+          regex: .*(github\.event\.workflow_run\.head_commit\.id|github\.event\.workflow_run\.head_sha|github\.event\.workflow_run\.head_branch|github\.event\.workflow_run\.pull_requests\[.*\]\.head\.(ref|sha)).*
+
+  # ---------------------------------------------------------------------------
+  # Workflow Run: Dangerous git checkout
+  # ---------------------------------------------------------------------------
+  - id: gha-workflow-run-dangerous-git-checkout
+    message: >-
+      Manual git checkout of workflow_run commit in a workflow_run workflow.
+      This checks out attacker-controlled code from the triggering workflow
+      with base repository privileges.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: workflow_run
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            workflow_run: ...
+          ...
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*(git\s+checkout\s+.*github\.event\.workflow_run\.head_(commit|sha)).*

@@ -1,0 +1,183 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Context Injection: pull_request_target
+  # ---------------------------------------------------------------------------
+  - id: gha-context-injection-pr-target
+    message: >-
+      Attacker-controlled context variable '${{$CONTEXT}}' is interpolated
+      into a run block in a pull_request_target workflow. An attacker can set
+      a branch name, PR title, or body containing shell metacharacters to
+      achieve arbitrary command execution.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: context_injection
+      references:
+        - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            pull_request_target: ...
+          ...
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*\$\{\{\s*(github\.head_ref|github\.event\.pull_request\.head\.ref|github\.event\.pull_request\.head\.label|github\.event\.pull_request\.title|github\.event\.pull_request\.body|github\.event\.comment\.body|github\.event\.review\.body|github\.event\.issue\.title|github\.event\.issue\.body)\s*\}\}.*
+
+  # ---------------------------------------------------------------------------
+  # Context Injection: workflow_run
+  # ---------------------------------------------------------------------------
+  - id: gha-context-injection-workflow-run
+    message: >-
+      Attacker-controlled context variable '${{$CONTEXT}}' is interpolated
+      into a run block in a workflow_run workflow. The triggering workflow may
+      have been opened by an attacker who controls branch names, commit
+      messages, or other fields.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: context_injection
+      references:
+        - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            workflow_run: ...
+          ...
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*\$\{\{\s*(github\.event\.workflow_run\.head_branch|github\.event\.workflow_run\.head_repository\.default_branch|github\.event\.workflow_run\.head_commit\.message|github\.event\.workflow_run\.head_commit\.author\.name|github\.event\.workflow_run\.head_commit\.author\.email|github\.event\.workflow_run\.display_title|github\.event\.workflow_run\.pull_requests\[\d*\]\.head\.ref)\s*\}\}.*
+
+  # ---------------------------------------------------------------------------
+  # Context Injection: issues
+  # ---------------------------------------------------------------------------
+  - id: gha-context-injection-issues
+    message: >-
+      Attacker-controlled context variable '${{$CONTEXT}}' is interpolated
+      into a run block in an issues-triggered workflow. Anyone who can create
+      an issue can inject malicious content via issue title, body, or user
+      display name.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: context_injection
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            issues: ...
+          ...
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*\$\{\{\s*(github\.event\.issue\.title|github\.event\.issue\.body|github\.event\.issue\.user\.name)\s*\}\}.*
+
+  # ---------------------------------------------------------------------------
+  # Context Injection: issue_comment
+  # ---------------------------------------------------------------------------
+  - id: gha-context-injection-issue-comment
+    message: >-
+      Attacker-controlled context variable '${{$CONTEXT}}' is interpolated
+      into a run block in an issue_comment workflow. Anyone who can comment
+      on an issue or PR can inject shell metacharacters.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: context_injection
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            issue_comment: ...
+          ...
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*\$\{\{\s*(github\.event\.comment\.body|github\.event\.comment\.user\.name|github\.event\.issue\.title|github\.event\.issue\.body)\s*\}\}.*
+
+  # ---------------------------------------------------------------------------
+  # Context Injection: discussion / discussion_comment
+  # ---------------------------------------------------------------------------
+  - id: gha-context-injection-discussion
+    message: >-
+      Attacker-controlled context variable '${{$CONTEXT}}' is interpolated
+      into a run block in a discussion-triggered workflow. Anyone who can
+      participate in discussions can inject malicious content.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: context_injection
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    paths:
+      include:
+        - ".github/workflows/"
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              on:
+                discussion: ...
+              ...
+          - pattern: |
+              run: $CMD
+          - metavariable-regex:
+              metavariable: $CMD
+              regex: (?s).*\$\{\{\s*(github\.event\.discussion\.title|github\.event\.discussion\.body|github\.event\.discussion\.user\.name|github\.event\.comment\.body|github\.event\.comment\.user\.name)\s*\}\}.*
+      - patterns:
+          - pattern-inside: |
+              on:
+                discussion_comment: ...
+              ...
+          - pattern: |
+              run: $CMD
+          - metavariable-regex:
+              metavariable: $CMD
+              regex: (?s).*\$\{\{\s*(github\.event\.discussion\.title|github\.event\.discussion\.body|github\.event\.discussion\.user\.name|github\.event\.comment\.body|github\.event\.comment\.user\.name)\s*\}\}.*

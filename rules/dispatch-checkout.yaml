@@ -1,0 +1,110 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Dispatch Checkout: issue_comment with PR code checkout
+  #
+  # Confused deputy vulnerability: a maintainer's comment triggers checkout
+  # of the PR author's (attacker's) code, which then executes with the
+  # maintainer's elevated privileges and access to secrets.
+  # ---------------------------------------------------------------------------
+  - id: gha-dispatch-checkout-issue-comment
+    message: >-
+      PR code is checked out via refs/pull/*/head in an issue_comment
+      workflow. This is a confused deputy vulnerability: the workflow
+      validates the commenter's permissions but executes the PR author's
+      code. An attacker can create a malicious PR, wait for a maintainer
+      to comment (e.g., "/run-tests"), and have their code execute with
+      the maintainer's privileges and access to secrets.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: dispatch_checkout
+      cwe:
+        - "CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            issue_comment: ...
+          ...
+      - pattern: |
+          uses: actions/checkout@$VER
+          with:
+            ref: $REF
+      - metavariable-regex:
+          metavariable: $REF
+          regex: .*(refs/pull/|needs\..*\.outputs\..*(pr-ref|pr_ref|pr-number|pr_number|number)).*
+
+  # ---------------------------------------------------------------------------
+  # Dispatch Checkout: gh pr checkout in issue_comment workflow
+  # ---------------------------------------------------------------------------
+  - id: gha-dispatch-gh-pr-checkout
+    message: >-
+      'gh pr checkout' is used in an issue_comment workflow. This checks
+      out attacker-controlled PR code. Even if the commenter has proper
+      permissions, the PR author's code executes with elevated privileges.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: dispatch_checkout
+      cwe:
+        - "CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            issue_comment: ...
+          ...
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*gh\s+pr\s+checkout.*
+
+  # ---------------------------------------------------------------------------
+  # Dispatch Checkout: repository_dispatch with PR checkout
+  # ---------------------------------------------------------------------------
+  - id: gha-dispatch-checkout-repository-dispatch
+    message: >-
+      PR code is checked out in a repository_dispatch workflow. Ensure
+      the checkout ref is not attacker-controlled and that the dispatch
+      event source is trusted.
+    severity: WARNING
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - audit
+      technology:
+        - github-actions
+      vulnerability_type: dispatch_checkout
+      cwe:
+        - "CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            repository_dispatch: ...
+          ...
+      - pattern: |
+          uses: actions/checkout@$VER
+          with:
+            ref: $REF
+      - metavariable-regex:
+          metavariable: $REF
+          regex: .*(refs/pull/|github\.event\.client_payload\..*(ref|sha|branch)).*

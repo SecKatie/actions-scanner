@@ -1,0 +1,87 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Artifact Injection: Download artifact from workflow_run and read into shell
+  # ---------------------------------------------------------------------------
+  - id: gha-artifact-injection-file-read
+    message: >-
+      Artifact content is read into a shell command after being downloaded
+      from a workflow_run trigger. An attacker can craft a malicious PR that
+      produces artifacts with injected content, which is then executed in the
+      privileged workflow_run context. Use jq for safe JSON extraction or
+      validate/sanitize artifact content before use.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - vuln
+      technology:
+        - github-actions
+      vulnerability_type: artifact_injection
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            workflow_run: ...
+          ...
+      - pattern-inside: |
+          steps:
+            - ...
+            - uses: actions/download-artifact@$VER
+              with:
+                ...
+                run-id: $RUNID
+            - ...
+      - metavariable-regex:
+          metavariable: $RUNID
+          regex: .*github\.event\.workflow_run\.id.*
+      - pattern: |
+          run: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s).*(\$\(<[^)]+\)|\$\(cat\s+[^)]+\)|`cat\s+[^`]+`|cat\s+\S+\s*\||source\s+\S+).*
+
+  # ---------------------------------------------------------------------------
+  # Artifact Injection: Download from workflow_run (warning-level)
+  #
+  # Flags any workflow_run that downloads artifacts using the triggering
+  # workflow's run-id. Even without a detected file-read pattern, the
+  # artifact content is attacker-controlled and should be treated carefully.
+  # ---------------------------------------------------------------------------
+  - id: gha-artifact-injection-download
+    message: >-
+      Artifacts are downloaded from a triggering workflow_run using its
+      run-id ('${{$RUNID}}'). These artifacts may contain attacker-controlled
+      content from a malicious PR. Ensure artifact data is validated or
+      extracted safely (e.g., via jq) before use in shell commands.
+    severity: WARNING
+    languages: [yaml]
+    metadata:
+      category: security
+      subcategory:
+        - audit
+      technology:
+        - github-actions
+      vulnerability_type: artifact_injection
+      cwe:
+        - "CWE-20: Improper Input Validation"
+    paths:
+      include:
+        - ".github/workflows/"
+    patterns:
+      - pattern-inside: |
+          on:
+            workflow_run: ...
+          ...
+      - pattern: |
+          uses: actions/download-artifact@$VER
+          with:
+            ...
+            run-id: $RUNID
+      - metavariable-regex:
+          metavariable: $RUNID
+          regex: .*github\.event\.workflow_run\.id.*

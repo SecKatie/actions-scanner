@@ -50,9 +50,11 @@ data/
 repos.txt
 repos-test.txt
 repos-vulnerable.txt
+repos-to-check.txt
 
 # Scan artifacts
 results.json
+outputs/
 
 # =============================================================================
 # Scanned/Cloned Repositories
@@ -68,6 +70,7 @@ vulnerable-workflows/
 .DS_Store
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
