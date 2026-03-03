@@ -8,10 +8,8 @@ CAUTION: Use findings responsibly and follow responsible disclosure practices.
 
 [source,bash]
 ----
-uv tool install actions-scanner
+uv tool install git+https://gitlab.cee.redhat.com/mulliken/actions-scanner.git
 ----
-
-Alternatively: `pipx install actions-scanner` or `pip install actions-scanner`.
 
 == Usage
 
@@ -41,7 +39,7 @@ The scanner flags workflows where all three conditions exist in the same job:
 
 [source,bash]
 ----
-git clone <repo-url> && cd actions-scanner
+git clone https://gitlab.cee.redhat.com/mulliken/actions-scanner.git && cd actions-scanner
 uv sync
 uv run pytest tests/ -v
 ----
