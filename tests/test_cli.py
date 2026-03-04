@@ -44,13 +44,6 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Clone repositories" in result.output
 
-    def test_validate_command_help(self, runner: CliRunner) -> None:
-        """Test validate command help."""
-        result = runner.invoke(cli, ["validate", "--help"])
-
-        assert result.exit_code == 0
-        assert "Validate vulnerabilities" in result.output
-
     def test_report_command_help(self, runner: CliRunner) -> None:
         """Test report command help."""
         result = runner.invoke(cli, ["report", "--help"])

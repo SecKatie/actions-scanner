@@ -1,10 +1,8 @@
 """Main CLI entry point for actions-scanner."""
 
 import asyncio
-import json
 import os
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import click
@@ -102,43 +100,6 @@ def _find_repo_dir_from_path(path: Path) -> Path | None:
     return None
 
 
-def _apply_validation_to_json_report(
-    report: dict,
-    validations: list[dict],
-) -> dict:
-    validation_index = {}
-    for entry in validations:
-        key = (
-            entry.get("org", ""),
-            entry.get("repo", ""),
-            entry.get("branch", ""),
-        )
-        validation_index[key] = entry
-
-    for vuln in report.get("vulnerabilities", []):
-        key = (
-            vuln.get("org", ""),
-            vuln.get("repo", ""),
-            vuln.get("branch", ""),
-        )
-        validation = validation_index.get(key)
-        if validation:
-            vuln["issue_type"] = validation.get("issue_type", "")
-            vuln["cvss"] = validation.get("cvss")
-            vuln["cwe"] = validation.get("cwe", "")
-            vuln["validation"] = {
-                "result": validation.get("result", ""),
-                "confirmation_file": validation.get("confirmation_file"),
-                "summary": validation.get("summary", ""),
-                "confidence": validation.get("confidence", ""),
-            }
-
-    report["validations"] = validations
-    report.setdefault("metadata", {})
-    report["metadata"]["validated_at"] = datetime.now().isoformat()
-    return report
-
-
 @cli.command()
 @click.argument("target", type=str)
 @click.option(
@@ -170,18 +131,6 @@ def _apply_validation_to_json_report(
     is_flag=True,
     help="Include same-repo-only findings (excluded by default)",
 )
-@click.option(
-    "--validate",
-    is_flag=True,
-    help="Run AI validation after scanning",
-)
-@click.option(
-    "--validate-agent",
-    type=str,
-    help='Custom validation agent command template (e.g., "codex -m gpt-4 -p {}")',
-)
-@click.option("--validate-workers", type=int, default=5, help="Parallel validation workers")
-@click.option("--validate-timeout", type=int, default=300, help="Timeout per repo in seconds")
 @click.option(
     "--all-branches",
     is_flag=True,
@@ -215,10 +164,6 @@ def scan(
     no_protected: bool,
     no_labeled: bool,
     include_same_repo: bool,
-    validate: bool,
-    validate_agent: str | None,
-    validate_workers: int,
-    validate_timeout: int,
     all_branches: bool,
     max_branches: int,
     clone_workers: int,
@@ -237,7 +182,6 @@ def scan(
     from actions_scanner.git import MultiBranchScanner, SparseCloner
     from actions_scanner.github import GitHubClient, OrgScanner
     from actions_scanner.reporting import (
-        append_columns_to_csv,
         generate_csv_report,
         generate_json_report,
         generate_markdown_report,
@@ -250,10 +194,6 @@ def scan(
         print_success,
         print_warning,
     )
-    from actions_scanner.utils.path import (
-        extract_org_repo_from_path,
-    )
-    from actions_scanner.validation import BatchValidationRunner, ValidationAgent
 
     settings: Settings = ctx.obj["settings"]
 
@@ -441,73 +381,15 @@ def scan(
         output = _default_output_path(output_format)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    validation_results: list[dict] = []
-    if validate and vulns:
-        command_template = validate_agent or settings.validation.command_template
-        validation_agent = ValidationAgent(
-            command_template=command_template,
-            timeout=validate_timeout,
-        )
-        runner = BatchValidationRunner(agent=validation_agent, concurrency=validate_workers)
-
-        repo_map: dict[tuple[str, str, str], dict] = {}
-        for v in vulns:
-            org, repo = extract_org_repo_from_path(str(v.workflow_path))
-            key = (org, repo, v.branch)
-            if key not in repo_map:
-                repo_map[key] = {
-                    "org": org,
-                    "repo": repo,
-                    "branch": v.branch,
-                    "workflow_paths": [],
-                    "working_dir": None,
-                }
-            repo_map[key]["workflow_paths"].append(str(v.workflow_path))
-            if repo_map[key]["working_dir"] is None:
-                repo_dir = _find_repo_dir_from_path(Path(v.workflow_path))
-                if repo_dir:
-                    repo_map[key]["working_dir"] = repo_dir
-
-        repo_list = list(repo_map.values())
-        print_info(
-            f"Validating {len(repo_list)} repositories with {validate_workers} parallel agents..."
-        )
-        results = asyncio.run(runner.validate_repos(repo_list, scan_base_dir or output.parent))
-        validation_results = [r.to_dict() for r in results]
-
     # Generate report (include_protected=True since filtering is done above)
     if output_format == "csv":
         generate_csv_report(vulns, output, include_protected=True)
-        if validate and vulns:
-            validation_index = {
-                (v.get("org", ""), v.get("repo", ""), v.get("branch", "")): v
-                for v in validation_results
-            }
-            append_columns_to_csv(
-                output,
-                output,
-                {
-                    "issue_type": lambda row: validation_index.get(
-                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
-                    ).get("issue_type", ""),
-                    "cvss": lambda row: validation_index.get(
-                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
-                    ).get("cvss", ""),
-                    "cwe": lambda row: validation_index.get(
-                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
-                    ).get("cwe", ""),
-                    "confirmation_file": lambda row: validation_index.get(
-                        (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
-                    ).get("confirmation_file", ""),
-                },
-            )
     elif output_format == "json":
         generate_json_report(
             vulns,
             output,
             include_protected=True,
             scan_base_dir=scan_base_dir,
-            validations=validation_results if validate else None,
         )
     else:
         generate_markdown_report(vulns, output, include_protected=True)
@@ -599,271 +481,6 @@ def clone(
         print_info(f"Skipped {stats.skipped} (already exist)")
     if stats.failed:
         print_error(f"Failed {stats.failed} repositories")
-
-
-@cli.command()
-@click.argument("vulnerabilities_file", type=click.Path(exists=True, path_type=Path))
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(path_type=Path),
-    help="Output file (defaults to input file with -validated suffix)",
-)
-@click.option(
-    "--repos-dir",
-    "-d",
-    type=click.Path(exists=True, path_type=Path),
-    help="Directory containing cloned repositories",
-)
-@click.option(
-    "--agent",
-    type=str,
-    help='Custom validation agent command template (e.g., "codex -m gpt-4 -p {}")',
-)
-@click.option("--workers", "-w", type=int, default=5, help="Parallel validation workers")
-@click.option("--timeout", type=int, default=300, help="Timeout per repo in seconds")
-@click.pass_context
-def validate(
-    ctx: click.Context,
-    vulnerabilities_file: Path,
-    output: Path | None,
-    repos_dir: Path | None,
-    agent: str | None,
-    workers: int,
-    timeout: int,
-) -> None:
-    """Validate vulnerabilities using AI agent.
-
-    Runs an AI agent to confirm or reject scanner findings.
-    Creates confirmed_vulnerable.txt, confirmed_weakness.txt, or not_vulnerable.txt.
-    """
-    import csv
-
-    from rich.live import Live
-    from rich.table import Table
-
-    from actions_scanner.reporting import (
-        load_json_report,
-        read_vulnerabilities_csv,
-        read_vulnerabilities_json,
-    )
-    from actions_scanner.utils.console import is_terminal, print_info, print_success, print_warning
-    from actions_scanner.utils.path import (
-        extract_org_repo_branch_from_path,
-        extract_org_repo_from_path,
-    )
-    from actions_scanner.validation import BatchValidationRunner, ValidationAgent
-
-    settings: Settings = ctx.obj["settings"]
-
-    # Use provided agent or settings
-    command_template = agent or settings.validation.command_template
-
-    print_info(f"Using agent: {command_template.split()[0]}")
-    print_info(f"Reading vulnerabilities from {vulnerabilities_file}...")
-    suffix = vulnerabilities_file.suffix.lower()
-    if suffix == ".json":
-        vulns = read_vulnerabilities_json(vulnerabilities_file)
-        report_data = load_json_report(vulnerabilities_file)
-    else:
-        vulns = read_vulnerabilities_csv(vulnerabilities_file)
-        report_data = {"vulnerabilities": vulns, "metadata": {}}
-    if not isinstance(report_data, dict):
-        report_data = {"vulnerabilities": vulns, "metadata": {}}
-    print_info(f"Found {len(vulns)} vulnerability records")
-
-    normalized_vulns = []
-    skipped = 0
-    for v in vulns:
-        org = v.get("org", "") or ""
-        repo = v.get("repo", "") or ""
-        branch = v.get("branch", "") or ""
-        if (not org or not repo) and v.get("workflow_path"):
-            inferred_org, inferred_repo = extract_org_repo_from_path(
-                str(v.get("workflow_path", ""))
-            )
-            if not org:
-                org = inferred_org
-            if not repo:
-                repo = inferred_repo
-        if not branch and v.get("workflow_path"):
-            _org, _repo, inferred_branch = extract_org_repo_branch_from_path(
-                str(v.get("workflow_path", ""))
-            )
-            if inferred_branch:
-                branch = inferred_branch
-        if not repo:
-            skipped += 1
-            continue
-        v["org"] = org
-        v["repo"] = repo
-        v["branch"] = branch
-        normalized_vulns.append(v)
-
-    if skipped:
-        print_warning(f"Skipped {skipped} records without a resolvable repository")
-
-    if isinstance(report_data, dict):
-        report_data["vulnerabilities"] = normalized_vulns
-
-    # Group by repo + branch
-    repos: dict[tuple[str, str, str], dict] = {}
-    for v in normalized_vulns:
-        key = (v.get("org", ""), v.get("repo", ""))
-        branch = v.get("branch", "") or ""
-        full_key = (key[0], key[1], branch)
-        if full_key not in repos:
-            repos[full_key] = {
-                "org": key[0],
-                "repo": key[1],
-                "branch": branch,
-                "workflow_paths": [],
-                "working_dir": None,
-            }
-        repos[full_key]["workflow_paths"].append(v.get("workflow_path", ""))
-        if repos[full_key]["working_dir"] is None and v.get("workflow_path"):
-            repo_dir = _find_repo_dir_from_path(Path(str(v.get("workflow_path"))))
-            if repo_dir:
-                repos[full_key]["working_dir"] = repo_dir
-
-    repo_list = list(repos.values())
-
-    print_info(f"Validating {len(repo_list)} repositories with {workers} parallel agents...")
-    console.print()
-
-    validation_agent = ValidationAgent(
-        command_template=command_template,
-        timeout=timeout,
-    )
-    runner = BatchValidationRunner(agent=validation_agent, concurrency=workers)
-
-    # Track results for live display
-    results_log: list[tuple[str, str, str]] = []
-
-    def make_progress_table(completed: int, total: int) -> Table:
-        """Create a progress table showing recent results."""
-        table = Table(show_header=True, header_style="bold", box=None)
-        table.add_column("Progress", width=20)
-        table.add_column("Repository", width=40)
-        table.add_column("Result", width=15)
-
-        # Progress bar
-        pct = (completed / total) * 100
-        bar_width = 15
-        filled = int(bar_width * completed / total)
-        bar = "█" * filled + "░" * (bar_width - filled)
-        progress_str = f"[{bar}] {pct:5.1f}%"
-
-        # Show last 8 results
-        for org, repo, status in results_log[-8:]:
-            repo_display = f"{org}/{repo}"
-            if len(repo_display) > 38:
-                repo_display = repo_display[:35] + "..."
-
-            # Color based on result
-            if status == "vulnerable":
-                status_display = f"[red bold]{status}[/]"
-            elif status == "weakness":
-                status_display = f"[yellow]{status}[/]"
-            elif status == "false_positive":
-                status_display = f"[green]{status}[/]"
-            else:
-                status_display = f"[dim]{status}[/]"
-
-            table.add_row("", repo_display, status_display)
-
-        # Add progress row at the bottom
-        table.add_row(progress_str, f"[dim]{completed}/{total} complete[/]", "")
-
-        return table
-
-    def on_progress(completed: int, total: int, result) -> None:
-        if result:
-            status = result.result.value
-            results_log.append((result.org, result.repo, status))
-
-    # Determine base directory for repos
-    if repos_dir:
-        base_dir = repos_dir
-    else:
-        base_dir = None
-        if isinstance(report_data, dict):
-            metadata = report_data.get("metadata")
-            if isinstance(metadata, dict):
-                scan_base = metadata.get("scan_base_dir")
-                if scan_base:
-                    base_dir = Path(str(scan_base))
-        if base_dir is None:
-            base_dir = vulnerabilities_file.parent
-
-    validation_results: list = []
-
-    # Run with live progress display
-    async def run_with_progress() -> None:
-        nonlocal validation_results
-        if is_terminal():
-            with Live(
-                make_progress_table(0, len(repo_list)), refresh_per_second=2, console=console
-            ) as live:
-                original_callback = on_progress
-
-                def live_progress(completed: int, total: int, result) -> None:
-                    original_callback(completed, total, result)
-                    live.update(make_progress_table(completed, total))
-
-                validation_results = await runner.validate_repos(
-                    repo_list, base_dir, on_progress=live_progress
-                )
-        else:
-            validation_results = await runner.validate_repos(
-                repo_list, base_dir, on_progress=on_progress
-            )
-
-    asyncio.run(run_with_progress())
-
-    console.print()
-
-    stats = runner.get_stats()
-    print_success("Validation complete!")
-    console.print()
-    console.print("[bold]Results Summary:[/bold]")
-    console.print(f"  [red]● Vulnerable:[/]     {stats.vulnerable}")
-    console.print(f"  [yellow]● Weakness:[/]       {stats.weakness}")
-    console.print(f"  [green]● False positive:[/] {stats.false_positive}")
-    console.print(f"  [dim]● Failed:[/]         {stats.failed}")
-
-    validations = [r.to_dict() for r in validation_results]
-
-    if output is None:
-        output = vulnerabilities_file.with_name(f"{vulnerabilities_file.stem}-validated.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    if output.suffix.lower() == ".csv":
-        validation_index = {
-            (v.get("org", ""), v.get("repo", ""), v.get("branch", "")): v for v in validations
-        }
-        rows = [dict(v) for v in normalized_vulns]
-        for row in rows:
-            validation = validation_index.get(
-                (row.get("org", ""), row.get("repo", ""), row.get("branch", "")), {}
-            )
-            row["issue_type"] = validation.get("issue_type", "")
-            row["cvss"] = validation.get("cvss", "")
-            row["cwe"] = validation.get("cwe", "")
-            row["confirmation_file"] = validation.get("confirmation_file", "")
-
-        fieldnames = list(rows[0].keys()) if rows else []
-        with output.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
-    else:
-        report_data = _apply_validation_to_json_report(report_data, validations)
-        with output.open("w", encoding="utf-8") as f:
-            json.dump(report_data, f, indent=2)
-
-    print_success(f"Validated report written to {output}")
 
 
 @cli.command()
