@@ -29,3 +29,10 @@ repos:
         types: [python]
         pass_filenames: false
         stages: [pre-commit]
+
+      - id: pip-audit
+        name: pip-audit
+        entry: uv run pip-audit
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
