@@ -15,12 +15,8 @@ jobs:
           enable-cache: true
       - name: SAST (bandit)
         run: uv run --with bandit bandit -r src/ -ll
-      - name: SCA (snyk)
-        uses: snyk/actions/python@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --severity-threshold=high
+      - name: SCA (pip-audit)
+        run: uv run --with pip-audit pip-audit
 
   build:
     name: Build
