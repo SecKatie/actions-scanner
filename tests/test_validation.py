@@ -511,7 +511,7 @@ confidence: high
         assert result.cvss == 9.0
         assert result.cwe == "CWE-94"
         assert result.confidence == "high"
-        assert result.output_file.exists()
+        assert result.output_file is not None and result.output_file.exists()
 
         # Verify stats
         stats = runner.get_stats()

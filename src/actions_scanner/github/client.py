@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -108,7 +108,7 @@ class GitHubClient:
             await self._session.close()
             self._session = None
 
-    def _update_rate_limit(self, headers: dict[str, Any]) -> None:
+    def _update_rate_limit(self, headers: Mapping[str, Any]) -> None:
         """Update rate limit info from response headers."""
         if "X-RateLimit-Limit" in headers:
             self._rate_limit.limit = int(headers["X-RateLimit-Limit"])

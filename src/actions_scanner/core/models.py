@@ -1,11 +1,11 @@
 """Data models for vulnerability detection."""
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 
-class ProtectionLevel(str, Enum):
+class ProtectionLevel(StrEnum):
     """Protection level for a vulnerable job."""
 
     NONE = "none"  # Fully exploitable, any PR can trigger
@@ -21,7 +21,7 @@ class ProtectionLevel(str, Enum):
     )
 
 
-class VulnerabilityType(str, Enum):
+class VulnerabilityType(StrEnum):
     """Type of workflow vulnerability."""
 
     PWNREQUEST = "pwnrequest"  # pull_request_target trigger
@@ -31,7 +31,7 @@ class VulnerabilityType(str, Enum):
     DISPATCH_CHECKOUT = "dispatch_checkout"  # issue_comment/workflow_dispatch checkout of PR code
 
 
-class ExecType(str, Enum):
+class ExecType(StrEnum):
     """Type of dangerous execution after checkout."""
 
     LOCAL_ACTION = "local_action"

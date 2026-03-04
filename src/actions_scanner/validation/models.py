@@ -1,11 +1,11 @@
 """Data models for AI-assisted validation."""
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 
-class ValidationResult(str, Enum):
+class ValidationResult(StrEnum):
     """Result of AI validation."""
 
     VULNERABLE = "vulnerable"  # Confirmed exploitable

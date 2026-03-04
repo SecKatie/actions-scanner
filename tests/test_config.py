@@ -1,6 +1,6 @@
 """Tests for configuration management."""
 
-from actions_scanner.config import Settings, get_settings
+from actions_scanner.config import GitHubConfig, ScanConfig, Settings, get_settings
 
 
 class TestSettings:
@@ -19,8 +19,8 @@ class TestSettings:
     def test_settings_from_dict(self) -> None:
         """Test creating settings from a dictionary."""
         settings = Settings(
-            scan={"workers": 20, "max_branches_per_repo": 50},
-            github={"concurrency": 100},
+            scan=ScanConfig(workers=20, max_branches_per_repo=50),
+            github=GitHubConfig(concurrency=100),
         )
 
         assert settings.scan.workers == 20
