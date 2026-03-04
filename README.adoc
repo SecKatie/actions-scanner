@@ -8,7 +8,7 @@ CAUTION: Use findings responsibly and follow responsible disclosure practices.
 
 [source,bash]
 ----
-uv tool install git+https://gitlab.cee.redhat.com/mulliken/actions-scanner.git
+uv tool install git+https://github.com/SecKatie/actions-scanner.git
 ----
 
 == Usage
@@ -39,7 +39,7 @@ The scanner flags workflows where all three conditions exist in the same job:
 
 [source,bash]
 ----
-git clone https://gitlab.cee.redhat.com/mulliken/actions-scanner.git && cd actions-scanner
+git clone https://github.com/SecKatie/actions-scanner.git && cd actions-scanner
 uv sync
 uv run pytest tests/ -v
 ----
