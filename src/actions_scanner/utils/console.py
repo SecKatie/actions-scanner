@@ -41,7 +41,9 @@ def print_banner() -> None:
 ║                                                              ║
 ║   [bold white]ACTIONS SCANNER[/bold white]                                          ║
 ║   [dim]GitHub Actions Vulnerability Scanner[/dim]                       ║
-║   [dim]Detect exploitable pull_request_target workflows[/dim]           ║
+║   [dim]Detects: PwnRequest, workflow_run injection,              ║
+║   [dim]context injection, dispatch checkout, and execution     ║
+║   [dim]pattern vulnerabilities                                   ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝[/bold cyan]
 """
